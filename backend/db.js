@@ -64,6 +64,8 @@ async function initDB() {
         sku VARCHAR(100) NOT NULL,
         is_mall TINYINT(1) DEFAULT 0,
         image_url VARCHAR(500) DEFAULT NULL,
+        is_sponsored TINYINT(1) DEFAULT 0,
+        international_shipping TINYINT(1) DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE
       )`,
@@ -104,6 +106,26 @@ async function initDB() {
       await pool.query(tableQuery);
     }
     console.log("Database and tables initialized successfully.");
+
+    // Self-healing: add columns if they are missing
+    try {
+      await pool.query('ALTER TABLE products ADD COLUMN is_sponsored TINYINT(1) DEFAULT 0');
+      console.log("Self-healing: Added missing 'is_sponsored' column to products table.");
+    } catch (e) {
+      // Ignore error if column already exists
+    }
+    try {
+      await pool.query('ALTER TABLE products ADD COLUMN international_shipping TINYINT(1) DEFAULT 0');
+      console.log("Self-healing: Added missing 'international_shipping' column to products table.");
+    } catch (e) {
+      // Ignore error if column already exists
+    }
+    try {
+      await pool.query('ALTER TABLE shops ADD COLUMN banner_url VARCHAR(500) DEFAULT NULL');
+      console.log("Self-healing: Added missing 'banner_url' column to shops table.");
+    } catch (e) {
+      // Ignore error if column already exists
+    }
   } catch (error) {
     console.error("Database initialization failed. Please make sure XAMPP/MySQL is running.");
     console.error(error);

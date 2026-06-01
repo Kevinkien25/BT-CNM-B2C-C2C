@@ -4,10 +4,12 @@ import React, { useState, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useApp } from '@/context/AppContext';
+import { useLanguage } from '@/context/LanguageContext';
 
 function SearchBar() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { t } = useLanguage();
   const [searchQuery, setSearchQuery] = useState(searchParams?.get('search') || '');
 
   const handleSearchSubmit = (e) => {
@@ -23,7 +25,7 @@ function SearchBar() {
     <form onSubmit={handleSearchSubmit} className="flex-grow max-w-lg relative">
       <input
         type="text"
-        placeholder="Tìm kiếm sản phẩm, thương hiệu..."
+        placeholder={t('search_placeholder')}
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
         className="w-full pl-4 pr-12 py-2 border-2 border-red-500 rounded-full text-sm outline-none focus:ring-2 focus:ring-red-200 transition-all"
@@ -32,7 +34,7 @@ function SearchBar() {
         type="submit"
         className="absolute right-1 top-1 bottom-1 px-4 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-full transition-colors"
       >
-        Tìm
+        {t('search_btn')}
       </button>
     </form>
   );
@@ -40,6 +42,7 @@ function SearchBar() {
 
 export default function Header() {
   const { user, logout, cart } = useApp();
+  const { t, language, changeLanguage } = useLanguage();
   const router = useRouter();
   const [showDropdown, setShowDropdown] = useState(false);
 
@@ -49,17 +52,35 @@ export default function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-50 bg-white border-b border-red-100 shadow-sm">
+    <header className="sticky top-0 z-50 bg-white border-b border-red-100 shadow-sm font-sans">
       {/* Top mini-bar */}
       <div className="bg-red-600 text-white text-xs py-1.5 px-4 font-light">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div>
-            <span>Đồ án tốt nghiệp: Hệ thống Thương mại Điện tử C2C & B2C</span>
+            <span className="hidden sm:inline">Đồ án tốt nghiệp: Hệ thống Thương mại Điện tử C2C & B2C</span>
+            <span className="sm:hidden">C2C & B2C E-Commerce</span>
           </div>
-          <div className="flex gap-4">
-            <Link href="/seller" className="hover:underline">Kênh Người Bán</Link>
+          <div className="flex gap-4 items-center">
+            {/* Language Switcher */}
+            <div className="flex items-center gap-1.5 bg-red-700/50 border border-white/20 rounded px-2 py-0.5 text-[10px] font-bold">
+              <button 
+                onClick={() => changeLanguage('vi')} 
+                className={`hover:text-red-200 transition ${language === 'vi' ? 'text-white underline underline-offset-2' : 'text-white/60'}`}
+              >
+                VI
+              </button>
+              <span className="text-white/20">|</span>
+              <button 
+                onClick={() => changeLanguage('en')} 
+                className={`hover:text-red-200 transition ${language === 'en' ? 'text-white underline underline-offset-2' : 'text-white/60'}`}
+              >
+                EN
+              </button>
+            </div>
+
+            <Link href="/seller" className="hover:underline">{t('seller_channel')}</Link>
             {user?.role === 'admin' && (
-              <Link href="/admin" className="hover:underline font-semibold">Trang Quản Trị (Admin)</Link>
+              <Link href="/admin" className="hover:underline font-semibold">{t('admin_channel')}</Link>
             )}
           </div>
         </div>
@@ -72,7 +93,7 @@ export default function Header() {
           <span className="text-2xl font-black tracking-tight text-red-600">
             RED<span className="text-gray-900">MALL</span>
           </span>
-          <span className="bg-red-100 text-red-700 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+          <span className="bg-red-100 text-red-700 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider hidden xs:inline">
             B2C & C2C
           </span>
         </Link>
@@ -119,22 +140,24 @@ export default function Header() {
                   <div className="px-4 py-2 border-b border-gray-100">
                     <p className="font-semibold text-gray-800">{user?.name || 'User'}</p>
                     <p className="text-xs text-gray-500 truncate">{user?.email || ''}</p>
-                    <p className="mt-1"><span className="text-[10px] bg-red-50 text-red-700 border border-red-100 px-2 py-0.5 rounded font-bold uppercase">
-                      {user?.role === 'admin' ? 'Admin' : user?.role === 'b2c_seller' ? 'Doanh nghiệp B2C' : user?.role === 'c2c_seller' ? 'Cá nhân C2C' : 'Người Mua'}
-                    </span></p>
+                    <p className="mt-1">
+                      <span className="text-[10px] bg-red-50 text-red-700 border border-red-100 px-2 py-0.5 rounded font-bold uppercase">
+                        {user?.role === 'admin' ? 'Admin' : user?.role === 'b2c_seller' ? t('business') : user?.role === 'c2c_seller' ? t('individual') : 'Buyer'}
+                      </span>
+                    </p>
                   </div>
                   
                   <Link href="/orders" className="block px-4 py-2 text-gray-700 hover:bg-red-50 hover:text-red-600 transition-colors">
-                    Lịch sử mua hàng
+                    {t('orders')}
                   </Link>
 
                   <Link href="/seller" className="block px-4 py-2 text-gray-700 hover:bg-red-50 hover:text-red-600 transition-colors">
-                    Quản lý Cửa hàng
+                    {t('seller_channel')}
                   </Link>
 
                   {user?.role === 'admin' && (
                     <Link href="/admin" className="block px-4 py-2 text-red-600 font-semibold hover:bg-red-50 transition-colors">
-                      Bảng Quản trị Admin
+                      {t('admin_channel')}
                     </Link>
                   )}
 
@@ -143,7 +166,7 @@ export default function Header() {
                     onClick={handleLogout}
                     className="w-full text-left px-4 py-2 text-gray-500 hover:bg-red-50 hover:text-red-600 transition-colors"
                   >
-                    Đăng xuất
+                    {t('logout')}
                   </button>
                 </div>
               )}
@@ -151,10 +174,10 @@ export default function Header() {
           ) : (
             <div className="flex items-center gap-2">
               <Link href="/login" className="text-sm font-medium text-gray-600 hover:text-red-600 transition-colors px-3 py-1.5 rounded-full hover:bg-gray-50">
-                Đăng nhập
+                {t('login')}
               </Link>
               <Link href="/register" className="text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition-all px-4 py-1.5 rounded-full shadow-sm">
-                Đăng ký
+                {language === 'vi' ? 'Đăng ký' : 'Register'}
               </Link>
             </div>
           )}

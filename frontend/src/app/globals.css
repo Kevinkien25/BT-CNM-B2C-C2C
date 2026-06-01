@@ -24,3 +24,14 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Force input, textarea, and select text color to be black and background to be white for high visibility */
+input, textarea, select {
+  color: #000000 !important;
+  background-color: #ffffff !important;
+}
+
+input::placeholder, textarea::placeholder {
+  color: #6b7280 !important;
+}
+

@@ -1,20 +1,19 @@
 {
-  "name": "c2c-b2c-backend",
+  "name": "c2c-b2c-microservices-backend",
   "version": "1.0.0",
-  "description": "Backend API for C2C & B2C E-commerce System",
-  "main": "server.js",
+  "description": "Backend Microservices for C2C & B2C E-commerce System",
+  "main": "api-gateway/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "install-all": "npm install && cd api-gateway && npm install && cd ../auth-service && npm install && cd ../product-service && npm install && cd ../order-service && npm install && cd ../chatbot-service && npm install",
+    "start": "node seed.js && node node_modules/concurrently/dist/bin/concurrently.js \"npm run gateway\" \"npm run auth\" \"npm run product\" \"npm run order\" \"npm run chatbot\"",
+    "dev": "node seed.js && node node_modules/concurrently/dist/bin/concurrently.js \"npm run gateway\" \"npm run auth\" \"npm run product\" \"npm run order\" \"npm run chatbot\"",
+    "gateway": "node api-gateway/server.js",
+    "auth": "node auth-service/server.js",
+    "product": "node product-service/server.js",
+    "order": "node order-service/server.js",
+    "chatbot": "node chatbot-service/server.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.11.4",
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "jsonwebtoken": "^9.0.2",
-    "multer": "^2.1.1",
-    "mysql2": "^3.9.8"
+    "concurrently": "^8.2.2"
   }
 }

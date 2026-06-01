@@ -1,0 +1,358 @@
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const mongoose = require('mongoose');
+require('dotenv').config();
+
+const db = require('./db');
+const { authenticateToken, requireRole } = require('./middleware/auth');
+const aiService = require('./services/ai');
+
+const app = express();
+const PORT = 5002;
+
+app.use(cors());
+app.use(express.json());
+
+// Ensure uploads folder exists
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir);
+}
+app.use('/uploads', express.static(uploadsDir));
+
+// Mongoose MongoDB Schema for Product Reviews (NoSQL data)
+const ReviewSchema = new mongoose.Schema({
+  productId: Number,
+  userId: Number,
+  userName: String,
+  rating: Number,
+  comment: String,
+  reply: String,
+  createdAt: { type: Date, default: Date.now }
+});
+const MongoReview = mongoose.models.Review || mongoose.model('Review', ReviewSchema);
+
+// Memory fallback for Reviews if MongoDB is down
+let memoryReviews = [
+  { id: "m1", productId: 1, userId: 2, userName: "Nguyễn Văn Mua", rating: 5, comment: "Sản phẩm dùng tốt, đúng mô tả C2C.", reply: "Cảm ơn bạn đã tin tưởng ủng hộ shop đồ cũ của mình!", createdAt: new Date() }
+];
+
+// Health Check
+app.get('/api/products/health', (req, res) => {
+  res.json({ status: 'healthy', service: 'Product Service', mongoActive: db.isMongoAvailable() });
+});
+
+// Multer Storage Configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
+
+// Endpoint: File Upload
+app.post('/api/products/upload', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), upload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ message: 'Vui lòng chọn ảnh.' });
+  const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+  res.json({ message: 'Tải ảnh thành công!', url: fileUrl });
+});
+
+// 1. Đăng ký shop (Seller B1)
+app.post('/api/shop/register', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { shop_name, address, phone, tax_code } = req.body;
+  if (!shop_name || !address || !phone) return res.status(400).json({ message: 'Vui lòng điền đủ thông tin.' });
+
+  try {
+    const [existing] = await db.query('SELECT id FROM shops WHERE user_id = ?', [req.user.id]);
+    if (existing.length > 0) return res.status(400).json({ message: 'Bạn đã đăng ký shop rồi.' });
+
+    const shopType = req.user.role === 'b2c_seller' ? 'business' : 'individual';
+    if (shopType === 'business' && !tax_code) return res.status(400).json({ message: 'Mã số thuế bắt buộc đối với B2C.' });
+
+    const isApproved = shopType === 'individual' ? 1 : 0;
+    const [result] = await db.query(
+      'INSERT INTO shops (user_id, shop_name, shop_type, address, phone, tax_code, is_approved) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [req.user.id, shop_name, shopType, address, phone, tax_code || null, isApproved]
+    );
+
+    res.status(201).json({ message: 'Đăng ký cửa hàng thành công!', shopId: result.insertId });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// Lấy thông tin shop của tôi
+app.get('/api/shop/my-shop', authenticateToken, async (req, res) => {
+  try {
+    const [shops] = await db.query('SELECT * FROM shops WHERE user_id = ?', [req.user.id]);
+    if (shops.length === 0) return res.status(404).json({ message: 'Bạn chưa có shop.' });
+    res.json({ shop: shops[0] });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// Cập nhật banner/giao diện trang shop (Seller B13)
+app.put('/api/shop/my-shop/banner', authenticateToken, async (req, res) => {
+  const { banner_url } = req.body;
+  try {
+    await db.query('UPDATE shops SET banner_url = ? WHERE user_id = ?', [banner_url, req.user.id]);
+    res.json({ message: 'Cập nhật giao diện shop thành công!' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// 2. CRUD Products (Seller B2 / Buyer A2)
+// Lấy danh sách sản phẩm (hỗ trợ lọc tìm kiếm thông minh, sponsored, quốc tế)
+app.get('/api/products', async (req, res) => {
+  const { search, is_mall, shop_id, sponsored, international } = req.query;
+  let queryStr = 'SELECT p.*, s.shop_name, s.shop_type FROM products p JOIN shops s ON p.shop_id = s.id WHERE s.is_approved = 1';
+  let params = [];
+
+  if (search) {
+    const sLower = search.toLowerCase().trim();
+    if (sLower === 'điện thoại' || sLower === 'điện thoại & tablet') {
+      queryStr += ` AND (p.name LIKE ? OR p.description LIKE ? OR p.name LIKE ? OR p.name LIKE ? OR p.name LIKE ? OR p.name LIKE ?)`;
+      params.push('%điện thoại%', '%điện thoại%', '%iphone%', '%ipad%', '%samsung%', '%oppo%');
+    } else if (sLower === 'laptop' || sLower === 'laptop & pc') {
+      queryStr += ` AND (p.name LIKE ? OR p.description LIKE ? OR p.name LIKE ? OR p.name LIKE ?)`;
+      params.push('%laptop%', '%laptop%', '%macbook%', '%dell%');
+    } else {
+      queryStr += ` AND (p.name LIKE ? OR p.description LIKE ?)`;
+      params.push(`%${search}%`, `%${search}%`);
+    }
+  }
+
+  if (is_mall === 'true' || is_mall === '1') {
+    queryStr += ' AND p.is_mall = 1';
+  }
+  if (shop_id) {
+    queryStr += ' AND p.shop_id = ?';
+    params.push(shop_id);
+  }
+  if (sponsored === 'true' || sponsored === '1') {
+    queryStr += ' AND p.is_sponsored = 1';
+  }
+  if (international === 'true' || international === '1') {
+    queryStr += ' AND p.international_shipping = 1';
+  }
+
+  queryStr += ' ORDER BY p.is_sponsored DESC, p.created_at DESC';
+
+  try {
+    const [products] = await db.query(queryStr, params);
+    res.json({ products });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Lấy sản phẩm nổi bật quảng cáo (Seller B12)
+app.get('/api/products/sponsored', async (req, res) => {
+  try {
+    const [products] = await db.query(
+      'SELECT p.*, s.shop_name FROM products p JOIN shops s ON p.shop_id = s.id WHERE p.is_sponsored = 1 AND s.is_approved = 1'
+    );
+    res.json({ products });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// Lấy chi tiết sản phẩm
+app.get('/api/products/:id', async (req, res) => {
+  try {
+    const [products] = await db.query(
+      `SELECT p.*, s.shop_name, s.shop_type, s.address AS shop_address, s.phone AS shop_phone, s.tax_code, s.is_approved AS shop_approved, s.banner_url
+       FROM products p
+       JOIN shops s ON p.shop_id = s.id
+       WHERE p.id = ?`,
+      [req.params.id]
+    );
+    if (products.length === 0) return res.status(404).json({ message: 'Không tìm thấy sản phẩm.' });
+    res.json({ product: products[0] });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// Thêm sản phẩm mới (chủ shop)
+app.post('/api/products', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { name, description, price, stock, sku, image_url, is_sponsored, international_shipping } = req.body;
+  if (!name || !price || stock === undefined || !sku) return res.status(400).json({ message: 'Thiếu thông tin.' });
+
+  try {
+    const [shops] = await db.query('SELECT * FROM shops WHERE user_id = ?', [req.user.id]);
+    if (shops.length === 0) return res.status(400).json({ message: 'Bạn chưa tạo cửa hàng.' });
+
+    const shop = shops[0];
+    const isMall = (shop.shop_type === 'business' && shop.is_approved === 1) ? 1 : 0;
+    const defaultImg = image_url || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=500&auto=format&fit=crop&q=60';
+
+    const [result] = await db.query(
+      `INSERT INTO products (shop_id, name, description, price, stock, sku, is_mall, image_url, is_sponsored, international_shipping)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [shop.id, name, description || '', price, stock, sku, isMall, defaultImg, is_sponsored || 0, international_shipping || 0]
+    );
+
+    res.status(201).json({ message: 'Đăng bán thành công!', productId: result.insertId });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Cập nhật sản phẩm
+app.put('/api/products/:id', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { name, description, price, stock, sku, image_url, is_sponsored, international_shipping } = req.body;
+  try {
+    const [shops] = await db.query('SELECT id FROM shops WHERE user_id = ?', [req.user.id]);
+    if (shops.length === 0) return res.status(403).json({ message: 'Không có quyền.' });
+
+    await db.query(
+      `UPDATE products SET name=?, description=?, price=?, stock=?, sku=?, image_url=?, is_sponsored=?, international_shipping=?
+       WHERE id=? AND shop_id=?`,
+      [name, description, price, stock, sku, image_url, is_sponsored || 0, international_shipping || 0, req.params.id, shops[0].id]
+    );
+    res.json({ message: 'Cập nhật sản phẩm thành công!' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// Xoá sản phẩm
+app.delete('/api/products/:id', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  try {
+    const [shops] = await db.query('SELECT id FROM shops WHERE user_id = ?', [req.user.id]);
+    if (shops.length === 0) return res.status(403).json({ message: 'Không có quyền.' });
+
+    await db.query('DELETE FROM products WHERE id=? AND shop_id=?', [req.params.id, shops[0].id]);
+    res.json({ message: 'Xóa sản phẩm thành công!' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// 3. Đánh giá & Phản hồi Sản Phẩm (Buyer A7 / Seller B11)
+app.post('/api/products/reviews', authenticateToken, async (req, res) => {
+  const { productId, rating, comment } = req.body;
+  if (!productId || !rating) return res.status(400).json({ message: 'Vui lòng cung cấp đủ thông tin đánh giá.' });
+
+  const reviewData = {
+    productId: Number(productId),
+    userId: req.user.id,
+    userName: req.user.name,
+    rating: Number(rating),
+    comment: comment || '',
+    reply: '',
+    createdAt: new Date()
+  };
+
+  try {
+    if (db.isMongoAvailable()) {
+      const review = new MongoReview(reviewData);
+      await review.save();
+    } else {
+      memoryReviews.push({ id: Date.now().toString(), ...reviewData });
+    }
+    res.json({ message: 'Đăng đánh giá thành công!' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi đăng đánh giá.' });
+  }
+});
+
+// Lấy danh sách đánh giá của sản phẩm
+app.get('/api/products/:productId/reviews', async (req, res) => {
+  const pid = Number(req.params.productId);
+  try {
+    if (db.isMongoAvailable()) {
+      const reviews = await MongoReview.find({ productId: pid }).sort({ createdAt: -1 });
+      res.json({ reviews });
+    } else {
+      const reviews = memoryReviews.filter(r => r.productId === pid);
+      res.json({ reviews });
+    }
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi tải đánh giá.' });
+  }
+});
+
+// Phản hồi/Trả lời đánh giá của người mua (Seller B11)
+app.put('/api/products/reviews/:id/reply', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { reply } = req.body;
+  const { id } = req.params;
+  try {
+    if (db.isMongoAvailable()) {
+      await MongoReview.findByIdAndUpdate(id, { reply });
+    } else {
+      const rev = memoryReviews.find(r => r.id === id);
+      if (rev) rev.reply = reply;
+    }
+    res.json({ message: 'Đã phản hồi đánh giá.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// 4. Trợ lý Marketing AI
+app.post('/api/products/ai-description', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { name, category } = req.body;
+  if (!name) return res.status(400).json({ message: 'Tên sản phẩm là bắt buộc.' });
+
+  try {
+    const desc = await aiService.generateProductDescription(name, category || '');
+    res.json({ description: desc });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi AI.' });
+  }
+});
+
+// 5. Admin: Duyệt Shop & Xem tất cả shops (Admin C1)
+app.get('/api/shop/admin/all', authenticateToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const [shops] = await db.query('SELECT * FROM shops ORDER BY created_at DESC');
+    res.json({ shops });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+app.put('/api/shop/admin/:id/approve', authenticateToken, requireRole(['admin']), async (req, res) => {
+  const { id } = req.params;
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [shops] = await conn.query('SELECT * FROM shops WHERE id = ?', [id]);
+    if (shops.length === 0) return res.status(404).json({ message: 'Không tìm thấy shop.' });
+    
+    await conn.query('UPDATE shops SET is_approved = 1 WHERE id = ?', [id]);
+    if (shops[0].shop_type === 'business') {
+      await conn.query('UPDATE products SET is_mall = 1 WHERE shop_id = ?', [id]);
+    }
+    await conn.commit();
+    res.json({ message: 'Đã phê duyệt shop thành công.' });
+  } catch (err) {
+    await conn.rollback();
+    res.status(500).json({ message: 'Lỗi phê duyệt.' });
+  } finally {
+    conn.release();
+  }
+});
+
+async function start() {
+  await db.initDB();
+  app.listen(PORT, () => {
+    console.log(`Product Service matches port ${PORT}`);
+  });
+}
+start();

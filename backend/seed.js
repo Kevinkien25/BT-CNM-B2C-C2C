@@ -90,3 +90,11 @@ async function seedData() {
 module.exports = {
   seedData
 };
+
+if (require.main === module) {
+  (async () => {
+    await db.initDB();
+    await seedData();
+    process.exit(0);
+  })();
+}
