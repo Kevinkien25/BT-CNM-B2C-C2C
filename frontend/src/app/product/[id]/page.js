@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, use } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useApp } from '@/context/AppContext';
@@ -10,11 +11,139 @@ export default function ProductDetail({ params }) {
   const resolvedParams = use(params);
   const productId = resolvedParams.id;
 
-  const { backendUrl, addToCart } = useApp();
+  const { backendUrl, addToCart, user, token } = useApp();
   const [product, setProduct] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [quantity, setQuantity] = useState(1);
+
+  const router = useRouter();
+  const [isFavourite, setIsFavourite] = useState(false);
+  const [reviews, setReviews] = useState([]);
+  const [reviewsLoading, setReviewsLoading] = useState(false);
+  const [writeRating, setWriteRating] = useState(5);
+  const [writeComment, setWriteComment] = useState('');
+  const [replyingReviewId, setReplyingReviewId] = useState(null);
+  const [replyText, setReplyText] = useState('');
+
+  const fetchReviews = async () => {
+    setReviewsLoading(true);
+    try {
+      const res = await fetch(`${backendUrl}/api/products/${productId}/reviews`);
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setReviews(data.reviews || []);
+    } catch (err) {
+      console.warn("Failed to fetch reviews");
+      setReviews([]);
+    } finally {
+      setReviewsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (productId) {
+      fetchReviews();
+    }
+  }, [productId]);
+
+  // Sync wishlist state from localStorage
+  useEffect(() => {
+    if (product) {
+      const key = `favs_${user?.id || 'guest'}`;
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        const favs = JSON.parse(stored);
+        setIsFavourite(favs.some(f => f.id.toString() === product.id.toString()));
+      }
+    }
+  }, [product, user]);
+
+  const handleWishlistToggle = () => {
+    const key = `favs_${user?.id || 'guest'}`;
+    const stored = localStorage.getItem(key);
+    let favs = stored ? JSON.parse(stored) : [];
+
+    if (isFavourite) {
+      favs = favs.filter(f => f.id.toString() !== product.id.toString());
+      setIsFavourite(false);
+      alert("Đã xóa sản phẩm khỏi danh sách yêu thích.");
+    } else {
+      favs.push({
+        id: product.id,
+        name: product.name,
+        price: product.price,
+        image_url: product.image_url,
+        shop_name: product.shop_name
+      });
+      setIsFavourite(true);
+      alert("Đã thêm sản phẩm vào danh sách yêu thích.");
+    }
+    localStorage.setItem(key, JSON.stringify(favs));
+  };
+
+  const handleChatClick = () => {
+    if (!token) {
+      alert("Vui lòng đăng nhập để chat với người bán.");
+      router.push('/login');
+      return;
+    }
+    router.push(`/orders?tab=chat&sellerId=${product.seller_user_id}&sellerName=${encodeURIComponent(product.shop_name)}`);
+  };
+
+  const handleSubmitReview = async () => {
+    if (!writeComment.trim()) {
+      alert("Vui lòng nhập nội dung đánh giá.");
+      return;
+    }
+    try {
+      const res = await fetch(`${backendUrl}/api/products/reviews`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          productId: Number(productId),
+          rating: Number(writeRating),
+          comment: writeComment.trim()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      alert("Đăng đánh giá thành công!");
+      setWriteComment('');
+      setWriteRating(5);
+      fetchReviews();
+    } catch (err) {
+      alert("Lỗi: " + err.message);
+    }
+  };
+
+  const handleReplySubmit = async (reviewId) => {
+    if (!replyText.trim()) {
+      alert("Vui lòng nhập nội dung phản hồi.");
+      return;
+    }
+    try {
+      const res = await fetch(`${backendUrl}/api/products/reviews/${reviewId}/reply`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ reply: replyText.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      alert("Đã phản hồi đánh giá thành công!");
+      setReplyingReviewId(null);
+      setReplyText('');
+      fetchReviews();
+    } catch (err) {
+      alert("Lỗi: " + err.message);
+    }
+  };
 
   useEffect(() => {
     async function fetchProductDetail() {
@@ -201,11 +330,11 @@ export default function ProductDetail({ params }) {
             </div>
 
             {/* Cart Button */}
-            <div className="pt-6">
+            <div className="pt-6 flex gap-3">
               <button
                 onClick={handleAddToCart}
                 disabled={isOutOfStock}
-                className={`w-full py-4 rounded-2xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 ${
+                className={`flex-grow py-4 rounded-2xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 ${
                   isOutOfStock
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-none'
                     : 'bg-red-600 hover:bg-red-700 text-white hover:shadow-red-200'
@@ -215,6 +344,26 @@ export default function ProductDetail({ params }) {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 00-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 00-16.536-1.84M7.5 14.25L5.106 5.272M6 20.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm12.75 0a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
                 </svg>
                 {isOutOfStock ? 'Hết Hàng' : 'Thêm Vào Giỏ Hàng'}
+              </button>
+
+              {/* Chat with Seller */}
+              {user?.id !== product.seller_user_id && (
+                <button
+                  onClick={handleChatClick}
+                  className="px-4 py-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-semibold shadow-sm transition flex items-center justify-center gap-1.5 text-xs flex-shrink-0"
+                  title="Chat với người bán"
+                >
+                  💬 Chat
+                </button>
+              )}
+
+              {/* Wishlist Heart */}
+              <button
+                onClick={handleWishlistToggle}
+                className="px-4 py-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-semibold shadow-sm transition flex items-center justify-center flex-shrink-0"
+                title="Lưu yêu thích"
+              >
+                {isFavourite ? '❤️' : '🤍'}
               </button>
             </div>
           </div>
@@ -226,6 +375,138 @@ export default function ProductDetail({ params }) {
           <div className="text-sm text-gray-600 leading-relaxed space-y-4 whitespace-pre-line">
             {product.description || 'Chưa có thông tin mô tả chi tiết cho sản phẩm này.'}
           </div>
+        </div>
+
+        {/* Reviews and Ratings Section */}
+        <div className="mt-10 bg-white p-6 md:p-10 border border-gray-100 rounded-3xl shadow-sm space-y-6">
+          <h2 className="text-lg font-black text-gray-800 tracking-tight pb-2 border-b border-gray-100 uppercase">ĐÁNH GIÁ TỪ NGƯỜI MUA</h2>
+
+          {/* Average Rating Stats */}
+          {reviews.length > 0 && (
+            <div className="flex items-center gap-4 bg-gray-50 p-4 rounded-2xl border border-gray-100 w-fit">
+              <span className="text-3xl font-black text-yellow-500">
+                {(reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1)} / 5.0
+              </span>
+              <div className="text-xs text-gray-500 font-semibold">
+                <p className="text-gray-800">⭐ Trung bình đánh giá</p>
+                <p>Dựa trên {reviews.length} nhận xét</p>
+              </div>
+            </div>
+          )}
+
+          {/* Leave a review form (For buyer) */}
+          {token && user?.id !== product.seller_user_id && (
+            <div className="bg-red-50/30 border border-red-100 p-5 rounded-2xl space-y-3">
+              <h3 className="font-bold text-gray-850 text-sm">Viết đánh giá của bạn</h3>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-gray-600 uppercase">Số sao:</span>
+                <div className="flex gap-1">
+                  {[1, 2, 3, 4, 5].map(star => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setWriteRating(star)}
+                      className="text-lg hover:scale-110 transition"
+                    >
+                      {star <= writeRating ? '⭐' : '☆'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <textarea
+                value={writeComment}
+                onChange={(e) => setWriteComment(e.target.value)}
+                placeholder="Nhập nội dung đánh giá chi tiết về sản phẩm..."
+                className="w-full border border-gray-200 rounded-xl p-3 text-xs outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 bg-white"
+                rows={2}
+              />
+              <div className="flex justify-end">
+                <button
+                  onClick={handleSubmitReview}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs px-4 py-2 rounded-xl shadow transition"
+                >
+                  Gửi đánh giá
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* List of Reviews */}
+          {reviewsLoading ? (
+            <div className="flex justify-center py-6">
+              <div className="w-6 h-6 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+          ) : reviews.length === 0 ? (
+            <p className="text-gray-400 text-xs italic">Chưa có đánh giá nào cho sản phẩm này.</p>
+          ) : (
+            <div className="divide-y divide-gray-100 space-y-4">
+              {reviews.map((rev) => (
+                <div key={rev.id} className="pt-4 first:pt-0 space-y-2">
+                  <div className="flex justify-between items-start gap-4">
+                    <div>
+                      <p className="font-bold text-xs text-gray-800">{rev.userName}</p>
+                      <div className="flex gap-0.5 text-xs mt-0.5">
+                        {Array.from({ length: 5 }).map((_, idx) => (
+                          <span key={idx}>{idx < rev.rating ? '⭐' : '☆'}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-gray-400">{new Date(rev.createdAt).toLocaleDateString()}</span>
+                  </div>
+                  <p className="text-xs text-gray-600 leading-relaxed pl-1">{rev.comment || 'Không có bình luận.'}</p>
+
+                  {/* Seller Reply Box */}
+                  {rev.reply ? (
+                    <div className="ml-6 bg-gray-50 border border-gray-100 p-3 rounded-xl space-y-1">
+                      <p className="font-bold text-[10px] text-red-600 uppercase tracking-wide">Phản hồi từ người bán:</p>
+                      <p className="text-xs text-gray-600 pl-1">{rev.reply}</p>
+                    </div>
+                  ) : (
+                    /* Reply Form for owner seller */
+                    token && user?.id === product.seller_user_id && (
+                      <div className="ml-6 space-y-2 pt-2">
+                        {replyingReviewId === rev.id ? (
+                          <div className="space-y-2">
+                            <textarea
+                              value={replyText}
+                              onChange={(e) => setReplyText(e.target.value)}
+                              placeholder="Nhập phản hồi của bạn về đánh giá này..."
+                              className="w-full border border-gray-200 rounded-xl p-3 text-xs outline-none focus:border-red-500 bg-white"
+                              rows={2}
+                            />
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => setReplyingReviewId(null)}
+                                className="bg-white border border-gray-300 text-gray-700 text-[10px] font-bold px-3 py-1 rounded-lg hover:bg-gray-50"
+                              >
+                                Hủy
+                              </button>
+                              <button
+                                onClick={() => handleReplySubmit(rev.id)}
+                                className="bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-lg hover:bg-red-700"
+                              >
+                                Gửi phản hồi
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setReplyingReviewId(rev.id);
+                              setReplyText('');
+                            }}
+                            className="text-[10px] font-bold text-red-600 hover:underline"
+                          >
+                            💬 Trả lời đánh giá này
+                          </button>
+                        )}
+                      </div>
+                    )
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </main>
       <Footer />

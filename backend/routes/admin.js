@@ -22,9 +22,10 @@ router.get('/shops', async (req, res) => {
   }
 });
 
-// 2. Phê duyệt Shop Doanh nghiệp (B2C)
+// 2. Phê duyệt hoặc Từ chối Shop (B2C & C2C)
 router.put('/shops/:shopId/approve', async (req, res) => {
   const { shopId } = req.params;
+  const { action, reject_reason } = req.body;
 
   const connection = await db.getConnection();
   try {
@@ -33,25 +34,42 @@ router.put('/shops/:shopId/approve', async (req, res) => {
     // Lấy thông tin shop
     const [shops] = await connection.query('SELECT * FROM shops WHERE id = ?', [shopId]);
     if (shops.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ message: 'Không tìm thấy cửa hàng.' });
     }
 
     const shop = shops[0];
 
-    // Cập nhật trạng thái duyệt của Shop
-    await connection.query('UPDATE shops SET is_approved = 1 WHERE id = ?', [shopId]);
+    if (action === 'reject') {
+      // Cập nhật trạng thái từ chối duyệt của Shop
+      await connection.query('UPDATE shops SET is_approved = 2, reject_reason = ? WHERE id = ?', [reject_reason || 'Không đạt điều kiện.', shopId]);
 
-    // Cập nhật toàn bộ sản phẩm của shop này có tag is_mall = 1 nếu shop này là doanh nghiệp (business)
-    if (shop.shop_type === 'business') {
-      await connection.query('UPDATE products SET is_mall = 1 WHERE shop_id = ?', [shopId]);
+      // Trả role user về 'buyer'
+      await connection.query('UPDATE users SET role = "buyer" WHERE id = ?', [shop.user_id]);
+
+      await connection.commit();
+      return res.json({ message: `Đã từ chối phê duyệt shop "${shop.shop_name}" thành công.` });
+    } else {
+      // Cập nhật trạng thái duyệt của Shop
+      await connection.query('UPDATE shops SET is_approved = 1, reject_reason = NULL WHERE id = ?', [shopId]);
+
+      // Đồng bộ nâng cấp role user thành seller tương ứng
+      const shopUser = shop.user_id;
+      const targetRole = shop.shop_type === 'business' ? 'b2c_seller' : 'c2c_seller';
+      await connection.query('UPDATE users SET role = ? WHERE id = ?', [targetRole, shopUser]);
+
+      // Cập nhật toàn bộ sản phẩm của shop này có tag is_mall = 1 nếu shop này là doanh nghiệp (business)
+      if (shop.shop_type === 'business') {
+        await connection.query('UPDATE products SET is_mall = 1 WHERE shop_id = ?', [shopId]);
+      }
+
+      await connection.commit();
+      res.json({ message: `Đã phê duyệt shop "${shop.shop_name}" thành công.` });
     }
-
-    await connection.commit();
-    res.json({ message: `Đã phê duyệt shop "${shop.shop_name}" thành công. Các sản phẩm của shop đã được nâng cấp lên gian hàng chính hãng.` });
   } catch (error) {
     await connection.rollback();
-    console.error("Lỗi duyệt shop:", error);
-    res.status(500).json({ message: 'Lỗi hệ thống khi phê duyệt cửa hàng.' });
+    console.error("Lỗi duyệt/từ chối shop:", error);
+    res.status(500).json({ message: 'Lỗi hệ thống khi phê duyệt/từ chối cửa hàng.' });
   } finally {
     connection.release();
   }

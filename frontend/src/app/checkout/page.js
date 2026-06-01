@@ -11,13 +11,79 @@ export default function Checkout() {
   const router = useRouter();
 
   const [address, setAddress] = useState('');
-  const [phone, setPhone] = useState('');
   const [receiverName, setReceiverName] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('COD');
+  const [phone, setPhone] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('Wallet');
   const [walletBalance, setWalletBalance] = useState(0);
-  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  const [voucherCode, setVoucherCode] = useState('');
+  const [appliedVoucher, setAppliedVoucher] = useState(null);
+  const [voucherError, setVoucherError] = useState(null);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [showAddressSelect, setShowAddressSelect] = useState(false);
+
+  useEffect(() => {
+    if (token) {
+      fetch(`${backendUrl}/api/auth/addresses`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      .then(res => res.ok ? res.json() : { addresses: [] })
+      .then(data => setSavedAddresses(data.addresses || []))
+      .catch(err => console.warn("Failed to fetch addresses:", err));
+    }
+  }, [token, backendUrl]);
+
+  const handleApplyVoucher = (e) => {
+    e.preventDefault();
+    setVoucherError(null);
+    setAppliedVoucher(null);
+
+    if (!voucherCode.trim()) return;
+
+    const shopId = cart[0]?.shop_id || cart[0]?.shopId || 2;
+    const stored = localStorage.getItem(`vouchers_${shopId}`);
+    
+    let matched = null;
+    if (stored) {
+      const vouchers = JSON.parse(stored);
+      matched = vouchers.find(v => v.code.toLowerCase().trim() === voucherCode.toLowerCase().trim());
+    }
+
+    // If not found in shop vouchers, check system-wide vouchers
+    if (!matched) {
+      const systemStored = localStorage.getItem('system_vouchers');
+      if (systemStored) {
+        const sysVouchers = JSON.parse(systemStored);
+        matched = sysVouchers.find(v => v.code.toLowerCase().trim() === voucherCode.toLowerCase().trim());
+      }
+    }
+
+    if (!matched) {
+      setVoucherError("Mã giảm giá không tồn tại, đã hết hạn hoặc không hợp lệ.");
+      return;
+    }
+
+    // Check min order value
+    const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const minOrderVal = Number(matched.minOrder || matched.min_spend || 0);
+    if (minOrderVal && total < minOrderVal) {
+      setVoucherError(`Đơn hàng tối thiểu phải từ ${minOrderVal.toLocaleString()} đ để áp dụng mã này.`);
+      return;
+    }
+
+    const discountVal = Number(matched.discount || matched.discount_amount || 0);
+    const normalizedVoucher = {
+      ...matched,
+      code: matched.code,
+      discount: discountVal,
+      minOrder: minOrderVal
+    };
+
+    setAppliedVoucher(normalizedVoucher);
+    alert(`Áp dụng mã giảm giá thành công! Giảm ${discountVal.toLocaleString()} đ`);
+  };
 
   // Fetch Wallet Balance
   useEffect(() => {
@@ -62,7 +128,8 @@ export default function Checkout() {
       return;
     }
 
-    if (paymentMethod === 'Wallet' && Number(walletBalance) < totalAmount) {
+    const finalTotal = totalAmount + 30000 - (appliedVoucher ? Number(appliedVoucher.discount) : 0);
+    if (paymentMethod === 'Wallet' && Number(walletBalance) < finalTotal) {
       setError("Số dư ví điện tử không đủ để thanh toán. Vui lòng nạp tiền vào ví.");
       return;
     }
@@ -87,7 +154,11 @@ export default function Checkout() {
         body: JSON.stringify({
           items: itemsPayload,
           shipping_address: shippingAddress,
-          payment_method: paymentMethod
+          payment_method: paymentMethod,
+          voucher_code: appliedVoucher ? appliedVoucher.code : null,
+          discount: appliedVoucher ? Number(appliedVoucher.discount) : 0,
+          shipping_fee: 30000,
+          shipping_partner: 'GHN'
         })
       });
 
@@ -134,7 +205,41 @@ export default function Checkout() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
           {/* Shipping Form */}
           <div className="lg:col-span-2 bg-white border border-gray-100 p-6 md:p-8 rounded-3xl shadow-sm space-y-6">
-            <h2 className="text-base font-black text-gray-800 pb-2 border-b border-gray-100 uppercase">THÔNG TIN GIAO HÀNG</h2>
+            <div className="flex justify-between items-center pb-2 border-b border-gray-100 mb-4">
+              <h2 className="text-base font-black text-gray-800 uppercase">THÔNG TIN GIAO HÀNG</h2>
+              {savedAddresses.length > 0 && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddressSelect(!showAddressSelect)}
+                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 text-[10px] font-bold py-1.5 px-3 rounded-lg shadow-sm transition"
+                  >
+                    📍 Sổ địa chỉ ({savedAddresses.length})
+                  </button>
+                  {showAddressSelect && (
+                    <div className="absolute right-0 mt-2 bg-white border border-gray-150 rounded-2xl shadow-xl w-64 max-h-48 overflow-y-auto p-2 z-20 space-y-1">
+                      <p className="text-[10px] text-gray-400 font-bold uppercase p-1 border-b border-gray-100">Chọn địa chỉ nhanh</p>
+                      {savedAddresses.map(addr => (
+                        <button
+                          key={addr.id}
+                          type="button"
+                          onClick={() => {
+                            setReceiverName(addr.receiver_name);
+                            setPhone(addr.phone);
+                            setAddress(addr.address_detail);
+                            setShowAddressSelect(false);
+                          }}
+                          className="w-full text-left p-1.5 hover:bg-red-50/50 rounded-xl transition text-[11px] font-medium text-gray-700 hover:text-red-600 space-y-0.5"
+                        >
+                          <p className="font-bold">{addr.receiver_name} | {addr.phone}</p>
+                          <p className="text-gray-400 truncate">{addr.address_detail}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             
             <form onSubmit={handleOrderSubmit} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -258,19 +363,52 @@ export default function Checkout() {
 
             <hr className="border-gray-100" />
 
-            <div className="space-y-3 text-sm">
+            {/* Voucher apply box */}
+            <div className="bg-white border border-gray-100 p-6 rounded-3xl shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-gray-800 uppercase">Mã giảm giá cửa hàng</h3>
+              <form onSubmit={handleApplyVoucher} className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Nhập mã voucher..."
+                  value={voucherCode}
+                  onChange={(e) => setVoucherCode(e.target.value)}
+                  className="flex-grow px-3 py-2 border border-gray-200 rounded-xl text-xs outline-none focus:border-red-500 bg-gray-50/50 focus:bg-white"
+                />
+                <button
+                  type="submit"
+                  className="bg-gray-800 hover:bg-gray-900 text-white text-xs font-bold px-4 py-2 rounded-xl transition shadow"
+                >
+                  Áp dụng
+                </button>
+              </form>
+              {voucherError && <p className="text-red-600 text-[10px] font-bold">❌ {voucherError}</p>}
+              {appliedVoucher && (
+                <div className="bg-green-50 border border-green-200 p-2.5 rounded-xl text-[11px] font-semibold text-green-700 flex justify-between items-center">
+                  <span>🎟️ Đã áp dụng: {appliedVoucher.code}</span>
+                  <span>-{Number(appliedVoucher.discount).toLocaleString('vi-VN')} đ</span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white border border-gray-100 p-6 rounded-3xl shadow-sm space-y-3 text-sm">
               <div className="flex justify-between text-gray-600">
                 <span>Tổng giá trị hàng:</span>
                 <span className="font-bold">{totalAmount.toLocaleString('vi-VN')} đ</span>
               </div>
               <div className="flex justify-between text-gray-600">
-                <span>Vận chuyển:</span>
-                <span className="text-green-600 font-medium">Miễn phí</span>
+                <span>Phí vận chuyển:</span>
+                <span className="font-bold">30.000 đ</span>
               </div>
+              {appliedVoucher && (
+                <div className="flex justify-between text-green-600">
+                  <span>Giảm giá (Voucher):</span>
+                  <span className="font-bold">-{Number(appliedVoucher.discount).toLocaleString('vi-VN')} đ</span>
+                </div>
+              )}
               <hr className="border-gray-100" />
               <div className="flex justify-between text-gray-800 text-base">
                 <span className="font-bold">Tổng thanh toán:</span>
-                <span className="font-black text-red-600 text-base">{totalAmount.toLocaleString('vi-VN')} đ</span>
+                <span className="font-black text-red-600 text-base">{(totalAmount + 30000 - (appliedVoucher ? Number(appliedVoucher.discount) : 0)).toLocaleString('vi-VN')} đ</span>
               </div>
             </div>
           </div>

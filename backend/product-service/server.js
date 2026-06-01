@@ -68,26 +68,39 @@ app.post('/api/products/upload', authenticateToken, requireRole(['c2c_seller', '
 });
 
 // 1. Đăng ký shop (Seller B1)
-app.post('/api/shop/register', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
-  const { shop_name, address, phone, tax_code } = req.body;
+app.post('/api/shop/register', authenticateToken, requireRole(['buyer', 'c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { shop_name, address, phone, tax_code, shop_type } = req.body;
   if (!shop_name || !address || !phone) return res.status(400).json({ message: 'Vui lòng điền đủ thông tin.' });
 
+  const conn = await db.getConnection();
   try {
-    const [existing] = await db.query('SELECT id FROM shops WHERE user_id = ?', [req.user.id]);
-    if (existing.length > 0) return res.status(400).json({ message: 'Bạn đã đăng ký shop rồi.' });
+    await conn.beginTransaction();
 
-    const shopType = req.user.role === 'b2c_seller' ? 'business' : 'individual';
-    if (shopType === 'business' && !tax_code) return res.status(400).json({ message: 'Mã số thuế bắt buộc đối với B2C.' });
+    const [existing] = await conn.query('SELECT id FROM shops WHERE user_id = ?', [req.user.id]);
+    if (existing.length > 0) {
+      await conn.rollback();
+      return res.status(400).json({ message: 'Bạn đã đăng ký shop rồi.' });
+    }
 
-    const isApproved = shopType === 'individual' ? 1 : 0;
-    const [result] = await db.query(
+    const shopType = shop_type || (req.user.role === 'b2c_seller' ? 'business' : 'individual');
+    if (shopType === 'business' && !tax_code) {
+      await conn.rollback();
+      return res.status(400).json({ message: 'Mã số thuế bắt buộc đối với B2C.' });
+    }
+
+    const isApproved = 0; // Cả B2C Mall và C2C Shop đều cần Admin duyệt, mặc định ban đầu là 0 (chờ duyệt)
+    const [result] = await conn.query(
       'INSERT INTO shops (user_id, shop_name, shop_type, address, phone, tax_code, is_approved) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [req.user.id, shop_name, shopType, address, phone, tax_code || null, isApproved]
     );
 
+    await conn.commit();
     res.status(201).json({ message: 'Đăng ký cửa hàng thành công!', shopId: result.insertId });
   } catch (err) {
-    res.status(500).json({ message: 'Lỗi.' });
+    await conn.rollback();
+    res.status(500).json({ message: 'Lỗi đăng ký shop.' });
+  } finally {
+    conn.release();
   }
 });
 
@@ -99,6 +112,24 @@ app.get('/api/shop/my-shop', authenticateToken, async (req, res) => {
     res.json({ shop: shops[0] });
   } catch (err) {
     res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// Reset thông tin đăng ký shop nếu bị từ chối (Seller reset)
+app.delete('/api/shop/my-shop', authenticateToken, async (req, res) => {
+  try {
+    const [shops] = await db.query('SELECT * FROM shops WHERE user_id = ?', [req.user.id]);
+    if (shops.length === 0) return res.status(404).json({ message: 'Không tìm thấy shop.' });
+    
+    if (shops[0].is_approved !== 2) {
+      return res.status(400).json({ message: 'Chỉ có thể xóa hồ sơ đăng ký shop đã bị từ chối.' });
+    }
+
+    await db.query('DELETE FROM shops WHERE id = ?', [shops[0].id]);
+    res.json({ success: true, message: 'Đã xóa hồ sơ đăng ký cũ để làm mới.' });
+  } catch (err) {
+    console.error("Lỗi xóa shop của tôi:", err);
+    res.status(500).json({ message: 'Lỗi hệ thống.' });
   }
 });
 
@@ -174,7 +205,7 @@ app.get('/api/products/sponsored', async (req, res) => {
 app.get('/api/products/:id', async (req, res) => {
   try {
     const [products] = await db.query(
-      `SELECT p.*, s.shop_name, s.shop_type, s.address AS shop_address, s.phone AS shop_phone, s.tax_code, s.is_approved AS shop_approved, s.banner_url
+      `SELECT p.*, s.shop_name, s.shop_type, s.address AS shop_address, s.phone AS shop_phone, s.tax_code, s.is_approved AS shop_approved, s.banner_url, s.user_id AS seller_user_id
        FROM products p
        JOIN shops s ON p.shop_id = s.id
        WHERE p.id = ?`,
@@ -329,18 +360,36 @@ app.get('/api/shop/admin/all', authenticateToken, requireRole(['admin']), async 
 
 app.put('/api/shop/admin/:id/approve', authenticateToken, requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
+  const { action, reject_reason } = req.body;
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
     const [shops] = await conn.query('SELECT * FROM shops WHERE id = ?', [id]);
     if (shops.length === 0) return res.status(404).json({ message: 'Không tìm thấy shop.' });
     
-    await conn.query('UPDATE shops SET is_approved = 1 WHERE id = ?', [id]);
-    if (shops[0].shop_type === 'business') {
-      await conn.query('UPDATE products SET is_mall = 1 WHERE shop_id = ?', [id]);
+    if (action === 'reject') {
+      await conn.query('UPDATE shops SET is_approved = 2, reject_reason = ? WHERE id = ?', [reject_reason || 'Không đạt điều kiện.', id]);
+      
+      // Trả role user về 'buyer'
+      await conn.query('UPDATE users SET role = "buyer" WHERE id = ?', [shops[0].user_id]);
+      
+      await conn.commit();
+      return res.json({ message: 'Đã từ chối phê duyệt shop.' });
+    } else {
+      // Approve
+      await conn.query('UPDATE shops SET is_approved = 1, reject_reason = NULL WHERE id = ?', [id]);
+      
+      // Đồng bộ nâng cấp role user thành seller tương ứng
+      const shopUser = shops[0].user_id;
+      const targetRole = shops[0].shop_type === 'business' ? 'b2c_seller' : 'c2c_seller';
+      await conn.query('UPDATE users SET role = ? WHERE id = ?', [targetRole, shopUser]);
+
+      if (shops[0].shop_type === 'business') {
+        await conn.query('UPDATE products SET is_mall = 1 WHERE shop_id = ?', [id]);
+      }
+      await conn.commit();
+      res.json({ message: 'Đã phê duyệt shop thành công.' });
     }
-    await conn.commit();
-    res.json({ message: 'Đã phê duyệt shop thành công.' });
   } catch (err) {
     await conn.rollback();
     res.status(500).json({ message: 'Lỗi phê duyệt.' });
@@ -386,6 +435,37 @@ app.get('/api/admin/shops', authenticateToken, requireRole(['admin']), async (re
     res.json({ shops });
   } catch (error) {
     console.error("Lỗi lấy danh sách shop admin:", error);
+    res.status(500).json({ message: 'Lỗi hệ thống.' });
+  }
+});
+
+// Admin content moderation: Get all products (STT 4)
+app.get('/api/admin/products', authenticateToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const [products] = await db.query(
+      `SELECT p.*, s.shop_name, u.email AS owner_email 
+       FROM products p
+       JOIN shops s ON p.shop_id = s.id
+       JOIN users u ON s.user_id = u.id
+       ORDER BY p.created_at DESC`
+    );
+    res.json({ products });
+  } catch (error) {
+    console.error("Lỗi lấy danh sách sản phẩm admin:", error);
+    res.status(500).json({ message: 'Lỗi hệ thống.' });
+  }
+});
+
+// Admin content moderation: Delete/Ban a product (STT 4)
+app.delete('/api/admin/products/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const [result] = await db.query('DELETE FROM products WHERE id = ?', [req.params.id]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy sản phẩm.' });
+    }
+    res.json({ success: true, message: 'Đã xóa sản phẩm vi phạm thành công.' });
+  } catch (error) {
+    console.error("Lỗi xóa sản phẩm admin:", error);
     res.status(500).json({ message: 'Lỗi hệ thống.' });
   }
 });

@@ -50,6 +50,7 @@ async function initDB() {
         phone VARCHAR(50) NOT NULL,
         tax_code VARCHAR(100) DEFAULT NULL,
         is_approved TINYINT(1) DEFAULT 0,
+        reject_reason VARCHAR(255) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )`,
@@ -99,6 +100,15 @@ async function initDB() {
         status ENUM('escrow', 'holding', 'released', 'refunded') DEFAULT 'holding',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS messages (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        sender_id INT NOT NULL,
+        receiver_id INT NOT NULL,
+        message TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
       )`
     ];
 
@@ -127,6 +137,12 @@ async function initDB() {
       // Ignore error if column already exists
     }
     try {
+      await pool.query('ALTER TABLE shops ADD COLUMN reject_reason VARCHAR(255) DEFAULT NULL');
+      console.log("Self-healing: Added missing 'reject_reason' column to shops table.");
+    } catch (e) {
+      // Ignore error if column already exists
+    }
+    try {
       await pool.query("ALTER TABLE orders ADD COLUMN shipping_partner VARCHAR(50) DEFAULT 'GHN'");
       console.log("Self-healing: Added missing 'shipping_partner' column to orders table.");
     } catch (e) {}
@@ -142,6 +158,22 @@ async function initDB() {
       await pool.query("ALTER TABLE transactions MODIFY COLUMN status ENUM('escrow', 'holding', 'released', 'refunded') DEFAULT 'holding'");
       console.log("Self-healing: Updated transactions status ENUM to include 'holding' in db.js.");
     } catch (e) {}
+
+    // Reset test shops' approval status to 0 (Pending) and roles to 'buyer' so the user can test the approval/rejection flow
+    try {
+      const [shopsToReset] = await pool.query("SELECT * FROM shops WHERE shop_name IN ('test 456', 'Shop SVfe', 'Cửa Hàng Đồ Cũ Tèo') OR is_approved = 1");
+      if (shopsToReset.length > 0) {
+        const ids = shopsToReset.map(s => s.id);
+        const userIds = shopsToReset.map(s => s.user_id);
+        // Reset shops' status to 0
+        await pool.query("UPDATE shops SET is_approved = 0, reject_reason = NULL WHERE id IN (?)", [ids]);
+        // Demote users' roles back to 'buyer'
+        await pool.query("UPDATE users SET role = 'buyer' WHERE id IN (?) AND role != 'admin'", [userIds]);
+        console.log("Self-healing: Reset test shops to is_approved = 0 and owners to buyer role.");
+      }
+    } catch (e) {
+      console.warn("Self-healing: Failed to reset test shops:", e.message);
+    }
   } catch (error) {
     console.error("Database initialization failed. Please make sure XAMPP/MySQL is running.");
     console.error(error);

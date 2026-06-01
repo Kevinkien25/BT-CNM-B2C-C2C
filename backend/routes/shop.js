@@ -3,9 +3,9 @@ const router = express.Router();
 const db = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 
-// 1. Đăng ký mở Shop (Chỉ dành cho c2c_seller và b2c_seller)
-router.post('/register', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
-  const { shop_name, address, phone, tax_code } = req.body;
+// 1. Đăng ký mở Shop (Dành cho buyer, c2c_seller và b2c_seller)
+router.post('/register', authenticateToken, requireRole(['buyer', 'c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { shop_name, address, phone, tax_code, shop_type } = req.body;
 
   if (!shop_name || !address || !phone) {
     return res.status(400).json({ message: 'Vui lòng nhập đầy đủ Tên shop, Địa chỉ và Số điện thoại.' });
@@ -18,15 +18,15 @@ router.post('/register', authenticateToken, requireRole(['c2c_seller', 'b2c_sell
       return res.status(400).json({ message: 'Bạn đã đăng ký mở shop rồi.' });
     }
 
-    const shopType = req.user.role === 'b2c_seller' ? 'business' : 'individual';
+    const shopType = shop_type || (req.user.role === 'b2c_seller' ? 'business' : 'individual');
     
     // Nếu là B2C Doanh nghiệp, bắt buộc phải có mã số thuế
     if (shopType === 'business' && !tax_code) {
       return res.status(400).json({ message: 'Doanh nghiệp đăng ký B2C bắt buộc phải có Mã số thuế.' });
     }
 
-    // Đối với shop C2C cá nhân, tự động duyệt. Shop B2C doanh nghiệp cần admin duyệt (is_approved = 0)
-    const isApproved = shopType === 'individual' ? 1 : 0;
+    // Cả B2C Mall và C2C Shop đều cần Admin duyệt, mặc định ban đầu là 0
+    const isApproved = 0;
 
     const [result] = await db.query(
       'INSERT INTO shops (user_id, shop_name, shop_type, address, phone, tax_code, is_approved) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -36,9 +36,7 @@ router.post('/register', authenticateToken, requireRole(['c2c_seller', 'b2c_sell
     const [newShops] = await db.query('SELECT * FROM shops WHERE id = ?', [result.insertId]);
 
     res.status(201).json({
-      message: shopType === 'business' 
-        ? 'Đăng ký shop doanh nghiệp thành công! Vui lòng chờ Admin phê duyệt mã số thuế.' 
-        : 'Đăng ký cửa hàng cá nhân thành công!',
+      message: 'Đăng ký cửa hàng thành công! Vui lòng chờ Ban quản trị phê duyệt.',
       shop: newShops[0]
     });
   } catch (error) {
@@ -47,8 +45,8 @@ router.post('/register', authenticateToken, requireRole(['c2c_seller', 'b2c_sell
   }
 });
 
-// 2. Lấy thông tin shop hiện tại của Seller
-router.get('/my-shop', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+// 2. Lấy thông tin shop hiện tại của Seller (Hoặc của Buyer đang chờ duyệt)
+router.get('/my-shop', authenticateToken, requireRole(['buyer', 'c2c_seller', 'b2c_seller']), async (req, res) => {
   try {
     const [shops] = await db.query('SELECT * FROM shops WHERE user_id = ?', [req.user.id]);
     if (shops.length === 0) {
@@ -57,6 +55,26 @@ router.get('/my-shop', authenticateToken, requireRole(['c2c_seller', 'b2c_seller
     res.json({ shop: shops[0] });
   } catch (error) {
     console.error("Lỗi lấy thông tin shop:", error);
+    res.status(500).json({ message: 'Lỗi hệ thống.' });
+  }
+});
+
+// 2.1. Reset thông tin đăng ký shop nếu bị từ chối
+router.delete('/my-shop', authenticateToken, requireRole(['buyer', 'c2c_seller', 'b2c_seller']), async (req, res) => {
+  try {
+    const [shops] = await db.query('SELECT * FROM shops WHERE user_id = ?', [req.user.id]);
+    if (shops.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy shop.' });
+    }
+
+    if (shops[0].is_approved !== 2) {
+      return res.status(400).json({ message: 'Chỉ có thể xóa hồ sơ đăng ký shop đã bị từ chối.' });
+    }
+
+    await db.query('DELETE FROM shops WHERE id = ?', [shops[0].id]);
+    res.json({ success: true, message: 'Đã xóa hồ sơ đăng ký cũ để làm mới.' });
+  } catch (err) {
+    console.error("Lỗi xóa shop của tôi:", err);
     res.status(500).json({ message: 'Lỗi hệ thống.' });
   }
 });

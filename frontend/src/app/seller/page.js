@@ -20,6 +20,7 @@ export default function SellerDashboard() {
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [taxCode, setTaxCode] = useState('');
+  const [shopType, setShopType] = useState('individual');
   const [regLoading, setRegLoading] = useState(false);
   const [regError, setRegError] = useState(null);
 
@@ -64,6 +65,14 @@ export default function SellerDashboard() {
       const [shopBannerUrl, setShopBannerUrl] = useState('');
       const [updatingBanner, setUpdatingBanner] = useState(false);
 
+      // Chat States
+      const [chatPartners, setChatPartners] = useState([]);
+      const [activePartner, setActivePartner] = useState(null);
+      const [chatMessages, setChatMessages] = useState([]);
+      const [chatInput, setChatInput] = useState('');
+      const [partnersLoading, setPartnersLoading] = useState(false);
+      const [messagesLoading, setMessagesLoading] = useState(false);
+
       // Fetch Shop Profile State & Logic
       const [shop, setShop] = useState(null);
       const [shopLoading, setShopLoading] = useState(true);
@@ -97,6 +106,16 @@ export default function SellerDashboard() {
         }
       }, [token]);
 
+      useEffect(() => {
+        if (user) {
+          if (user.role === 'b2c_seller') {
+            setShopType('business');
+          } else {
+            setShopType('individual');
+          }
+        }
+      }, [user]);
+
       // Guard routing
       useEffect(() => {
         if (!authLoading && !token) {
@@ -104,14 +123,15 @@ export default function SellerDashboard() {
         }
       }, [token, authLoading]);
 
-      // Load data based on tab and shop availability
+      // Load data based on tab and shop availability (only if shop is approved)
       useEffect(() => {
-        if (shop) {
+        if (shop && shop.is_approved === 1) {
           if (activeTab === 'products') fetchMyProducts();
-          if (activeTab === 'orders') fetchShopOrders();
+          if (activeTab === 'orders' || activeTab === 'analytics') fetchShopOrders();
           if (activeTab === 'wallet') fetchWalletData();
           if (activeTab === 'vouchers') loadVouchers();
           if (activeTab === 'branding') setShopBannerUrl(shop.banner_url || '');
+          if (activeTab === 'chat') fetchPartners();
         }
       }, [shop, activeTab]);
 
@@ -282,6 +302,79 @@ export default function SellerDashboard() {
     }
   };
 
+  // --- Chat Support Logic ---
+  const fetchPartners = async () => {
+    setPartnersLoading(true);
+    try {
+      const res = await fetch(`${backendUrl}/api/auth/chat/partners`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setChatPartners(data.partners || []);
+      return data.partners || [];
+    } catch (err) {
+      console.warn("Failed to fetch chat partners");
+      setChatPartners([]);
+      return [];
+    } finally {
+      setPartnersLoading(false);
+    }
+  };
+
+  const fetchChatHistory = async (partnerId) => {
+    setMessagesLoading(true);
+    try {
+      const res = await fetch(`${backendUrl}/api/auth/chat/history/${partnerId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setChatMessages(data.messages || []);
+    } catch (err) {
+      console.warn("Failed to fetch chat history");
+      setChatMessages([]);
+    } finally {
+      setMessagesLoading(false);
+    }
+  };
+
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!activePartner || !chatInput.trim()) return;
+
+    const partnerId = activePartner.partner_id;
+    const msgText = chatInput.trim();
+    setChatInput('');
+
+    // Optimistically add to messages list
+    const tempMsg = {
+      id: Date.now(),
+      sender_id: user.id,
+      receiver_id: partnerId,
+      message: msgText,
+      created_at: new Date().toISOString()
+    };
+    setChatMessages(prev => [...prev, tempMsg]);
+
+    try {
+      const res = await fetch(`${backendUrl}/api/auth/chat/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ receiverId: partnerId, message: msgText })
+      });
+      if (!res.ok) throw new Error();
+      
+      // Refresh partners list
+      fetchPartners();
+    } catch (err) {
+      console.error("Failed to send message:", err.message);
+    }
+  };
+
   // --- Register Shop Logic ---
   const handleRegisterShop = async (e) => {
     e.preventDefault();
@@ -290,7 +383,7 @@ export default function SellerDashboard() {
       return;
     }
 
-    if (user?.role === 'b2c_seller' && !taxCode) {
+    if (shopType === 'business' && !taxCode) {
       setRegError('Doanh nghiệp bắt buộc phải cung cấp Mã số thuế.');
       return;
     }
@@ -308,13 +401,15 @@ export default function SellerDashboard() {
           shop_name: shopName,
           address,
           phone,
-          tax_code: taxCode
+          tax_code: taxCode,
+          shop_type: shopType
         })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
 
       alert(language === 'vi' ? "Đăng ký mở gian hàng thành công!" : "Shop registered successfully!");
+      await refreshUser();
       await fetchShopProfile();
     } catch (err) {
       alert(language === 'vi' ? "Đăng ký shop thành công! (Chế độ Demo)" : "Shop registered! (Demo Mode)");
@@ -332,6 +427,34 @@ export default function SellerDashboard() {
       setRegLoading(false);
     }
   };
+
+  const handleResetAndReRegister = async () => {
+    if (!confirm(language === 'vi' ? 'Bạn có chắc chắn muốn xóa hồ sơ bị từ chối này và làm lại hồ sơ mới?' : 'Are you sure you want to delete this rejected profile and start a new registration?')) return;
+    setRegLoading(true);
+    setRegError(null);
+    try {
+      const res = await fetch(`${backendUrl}/api/shop/my-shop`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      
+      alert(language === 'vi' ? 'Đã reset hồ sơ. Vui lòng điền thông tin đăng ký mới!' : 'Profile reset. Please fill in new registration info!');
+      setShopName('');
+      setAddress('');
+      setPhone('');
+      setTaxCode('');
+      setShop(null);
+      await refreshUser();
+      await fetchShopProfile();
+    } catch (err) {
+      alert(language === 'vi' ? `Lỗi: ${err.message}` : `Error: ${err.message}`);
+    } finally {
+      setRegLoading(false);
+    }
+  };
+
 
   // --- AI Description Generator ---
   const handleGenerateAIDescription = async () => {
@@ -543,6 +666,50 @@ export default function SellerDashboard() {
     document.body.removeChild(link);
   };
 
+  const getAnalyticsData = () => {
+    const data = [];
+    const daysOfWeek = language === 'vi' 
+      ? ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
+      : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dayLabel = daysOfWeek[d.getDay()];
+      
+      const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
+      
+      const dayOrders = shopOrders.filter(o => {
+        const orderTime = new Date(o.created_at).getTime();
+        return orderTime >= startOfDay && orderTime < endOfDay;
+      });
+      
+      const dayTotal = dayOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
+      data.push({
+        day: dayLabel,
+        amount: dayTotal
+      });
+    }
+    
+    const maxAmount = Math.max(...data.map(d => d.amount), 1);
+    
+    const formatAmount = (num) => {
+      if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+      if (num >= 1000) return `${(num / 1000).toFixed(0)}k`;
+      return `${num}`;
+    };
+
+    return data.map(item => {
+      const pct = maxAmount > 1 ? Math.max(5, Math.min(95, Math.round((item.amount / maxAmount) * 95))) : 5;
+      return {
+        day: item.day,
+        val: `${pct}%`,
+        amount: formatAmount(item.amount)
+      };
+    });
+  };
+
   if (authLoading || shopLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center space-y-4 bg-gray-50">
@@ -562,7 +729,7 @@ export default function SellerDashboard() {
               <span className="text-4xl">🏪</span>
               <h1 className="text-2xl font-black text-gray-800 tracking-tight uppercase">{t('register_shop_btn')}</h1>
               <p className="text-sm text-gray-400">
-                {user?.role === 'b2c_seller' 
+                {shopType === 'business' 
                   ? 'Đăng ký gian hàng Mall doanh nghiệp chính hãng (B2C) cần phê duyệt.'
                   : 'Đăng ký gian hàng cá nhân C2C thanh lý đồ cũ (tự động kích hoạt).'}
               </p>
@@ -575,6 +742,43 @@ export default function SellerDashboard() {
             )}
 
             <form onSubmit={handleRegisterShop} className="space-y-4">
+              {user?.role === 'buyer' && (
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-gray-500 uppercase">Loại hình gian hàng *</label>
+                  <div className="grid grid-cols-2 gap-4">
+                    <label className={`border rounded-2xl p-4 flex flex-col items-center gap-2 cursor-pointer transition ${
+                      shopType === 'individual' ? 'border-red-650 bg-red-50/50 text-red-650 font-bold' : 'border-gray-200 hover:bg-gray-50'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="shopType"
+                        value="individual"
+                        checked={shopType === 'individual'}
+                        onChange={() => setShopType('individual')}
+                        className="hidden"
+                      />
+                      <span className="text-2xl">🏷️</span>
+                      <span className="font-bold text-xs">Cá nhân (C2C)</span>
+                      <span className="text-[10px] text-gray-400 text-center">Thanh lý đồ cũ cá nhân, tự động kích hoạt</span>
+                    </label>
+                    <label className={`border rounded-2xl p-4 flex flex-col items-center gap-2 cursor-pointer transition ${
+                      shopType === 'business' ? 'border-red-650 bg-red-50/50 text-red-650 font-bold' : 'border-gray-200 hover:bg-gray-50'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="shopType"
+                        value="business"
+                        checked={shopType === 'business'}
+                        onChange={() => setShopType('business')}
+                        className="hidden"
+                      />
+                      <span className="text-2xl">🏪</span>
+                      <span className="font-bold text-xs">Doanh nghiệp (B2C Mall)</span>
+                      <span className="text-[10px] text-gray-400 text-center">Gian hàng chính hãng, yêu cầu Mã số thuế & duyệt</span>
+                    </label>
+                  </div>
+                </div>
+              )}
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gray-500 uppercase">{t('shop_name')} *</label>
                 <input
@@ -587,7 +791,7 @@ export default function SellerDashboard() {
                 />
               </div>
 
-              {user?.role === 'b2c_seller' && (
+              {shopType === 'business' && (
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-gray-500 uppercase">{t('tax_code')} *</label>
                   <input
@@ -635,7 +839,7 @@ export default function SellerDashboard() {
               </button>
             </form>
           </div>
-        ) : shop.shop_type === 'business' && shop.is_approved === 0 ? (
+        ) : shop.is_approved === 0 ? (
           /* PENDING APPROVAL SCREEN */
           <div className="max-w-xl mx-auto bg-white border border-gray-150 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 text-center">
             <span className="text-5xl">⏳</span>
@@ -643,14 +847,19 @@ export default function SellerDashboard() {
               {language === 'vi' ? 'Đang Chờ Phê Duyệt' : 'Awaiting Admin Approval'}
             </h1>
             <p className="text-sm text-gray-500 leading-relaxed">
-              {language === 'vi' 
-                ? 'Cửa hàng Mall doanh nghiệp (B2C) của bạn đang được duyệt. Ban quản trị đang xác minh Mã số thuế và thông tin doanh nghiệp.'
-                : 'Your B2C Mall store profile is awaiting Admin verification and approval.'}
+              {shop.shop_type === 'business' 
+                ? (language === 'vi' 
+                    ? 'Cửa hàng Mall doanh nghiệp (B2C) của bạn đang được duyệt. Ban quản trị đang xác minh Mã số thuế và thông tin doanh nghiệp.'
+                    : 'Your B2C Mall store profile is awaiting Admin verification and approval.')
+                : (language === 'vi' 
+                    ? 'Cửa hàng cá nhân (C2C) của bạn đang được duyệt. Ban quản trị đang xem xét hồ sơ.'
+                    : 'Your C2C store profile is awaiting Admin review and approval.')
+              }
             </p>
             
             <div className="bg-gray-50 rounded-2xl p-4 text-left text-xs text-gray-600 space-y-2 border border-gray-100">
               <p><strong>{t('shop_name')}:</strong> {shop.shop_name}</p>
-              <p><strong>{t('shop_type')}:</strong> {t('business')}</p>
+              <p><strong>{t('shop_type')}:</strong> {shop.shop_type === 'business' ? 'B2C Mall' : 'C2C Shop'}</p>
               {shop.tax_code && <p><strong>{t('tax_code')}:</strong> {shop.tax_code}</p>}
               <p><strong>{t('phone')}:</strong> {shop.phone}</p>
               <p><strong>{t('address')}:</strong> {shop.address}</p>
@@ -668,6 +877,44 @@ export default function SellerDashboard() {
               className="mt-2 px-6 py-2.5 bg-red-600 text-white font-bold rounded-xl text-xs shadow hover:bg-red-700 transition"
             >
               🔄 {language === 'vi' ? 'Kiểm tra lại trạng thái' : 'Re-check Approval Status'}
+            </button>
+          </div>
+        ) : shop.is_approved === 2 ? (
+          /* REJECTED SCREEN */
+          <div className="max-w-xl mx-auto bg-white border border-gray-150 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 text-center">
+            <span className="text-5xl text-red-500">❌</span>
+            <h1 className="text-2xl font-black text-gray-800 tracking-tight uppercase">
+              {language === 'vi' ? 'Yêu Cầu Bị Từ Chối' : 'Registration Rejected'}
+            </h1>
+            <p className="text-sm text-gray-500 leading-relaxed">
+              {language === 'vi' 
+                ? 'Yêu cầu mở gian hàng của bạn không được phê duyệt bởi Ban quản trị.'
+                : 'Your shop registration request has been rejected by the administrator.'}
+            </p>
+            
+            <div className="bg-red-50 rounded-2xl p-4 text-left text-xs text-red-700 space-y-2 border border-red-100">
+              <p className="font-bold text-sm text-red-800">
+                {language === 'vi' ? 'Lý do từ chối:' : 'Rejection Reason:'}
+              </p>
+              <p className="bg-white p-3 rounded-xl border border-red-200 mt-1 italic text-gray-700">
+                {shop.reject_reason || (language === 'vi' ? 'Không có lý do cụ thể.' : 'No reason provided.')}
+              </p>
+            </div>
+
+            <div className="bg-gray-50 rounded-2xl p-4 text-left text-xs text-gray-600 space-y-2 border border-gray-100">
+              <p><strong>{t('shop_name')}:</strong> {shop.shop_name}</p>
+              <p><strong>{t('shop_type')}:</strong> {shop.shop_type === 'business' ? 'B2C Mall' : 'C2C Shop'}</p>
+              {shop.tax_code && <p><strong>{t('tax_code')}:</strong> {shop.tax_code}</p>}
+              <p><strong>{t('phone')}:</strong> {shop.phone}</p>
+              <p><strong>{t('address')}:</strong> {shop.address}</p>
+            </div>
+
+            <button
+              onClick={handleResetAndReRegister}
+              disabled={regLoading}
+              className="mt-2 px-6 py-2.5 bg-red-600 text-white font-bold rounded-xl text-xs shadow hover:bg-red-700 transition disabled:bg-gray-200"
+            >
+              {regLoading ? '⏳ Loading...' : (language === 'vi' ? 'Đăng ký lại' : 'Register Again')}
             </button>
           </div>
         ) : (
@@ -688,6 +935,7 @@ export default function SellerDashboard() {
                   { id: 'orders', label: language === 'vi' ? 'Đơn hàng bán' : 'Incoming Orders', icon: '📥' },
                   { id: 'wallet', label: language === 'vi' ? 'Ví doanh thu' : 'Sales Wallet', icon: '💳' },
                   { id: 'vouchers', label: language === 'vi' ? 'Mã giảm giá shop' : 'Shop Vouchers', icon: '🎟️' },
+                  { id: 'chat', label: language === 'vi' ? 'Hỗ trợ khách hàng' : 'Customer Support', icon: '💬' },
                   { id: 'analytics', label: t('sales_report'), icon: '📈' },
                   { id: 'branding', label: language === 'vi' ? 'Trang trí Shop' : 'Shop Branding', icon: '🎨' }
                 ].map(tab => (
@@ -1207,23 +1455,131 @@ export default function SellerDashboard() {
                   <div className="bg-white border border-gray-155 rounded-2xl p-5 shadow-sm space-y-4">
                     <h3 className="font-bold text-gray-800 text-sm">Biểu đồ tăng trưởng doanh số (7 ngày qua)</h3>
                     <div className="h-40 flex items-end justify-between px-4 pt-6 border-b border-l border-gray-200">
-                      {[
-                        { day: 'T2', val: 'h-[20%]', amount: '1.2M' },
-                        { day: 'T3', val: 'h-[40%]', amount: '2.5M' },
-                        { day: 'T4', val: 'h-[30%]', amount: '1.8M' },
-                        { day: 'T5', val: 'h-[60%]', amount: '3.9M' },
-                        { day: 'T6', val: 'h-[80%]', amount: '5.2M' },
-                        { day: 'T7', val: 'h-[75%]', amount: '4.8M' },
-                        { day: 'CN', val: 'h-[95%]', amount: '6.4M' }
-                      ].map((item, i) => (
-                        <div key={i} className="flex flex-col items-center gap-1.5 w-1/8 group cursor-pointer relative">
+                      {getAnalyticsData().map((item, i) => (
+                        <div key={i} className="h-full flex flex-col justify-end items-center gap-1.5 w-1/8 group cursor-pointer relative">
                           <span className="absolute -top-6 bg-gray-800 text-white text-[9px] px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
                             {item.amount}
                           </span>
-                          <div className={`w-8 bg-red-500 hover:bg-red-600 rounded-t transition-all ${item.val}`} />
+                          <div 
+                            style={{ height: item.val }} 
+                            className="w-8 bg-red-500 hover:bg-red-600 rounded-t transition-all" 
+                          />
                           <span className="text-[10px] text-gray-500 font-bold">{item.day}</span>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* CHAT TAB */}
+              {activeTab === 'chat' && (
+                <div className="space-y-6">
+                  <h2 className="text-xl font-black text-gray-800 uppercase">
+                    {language === 'vi' ? 'Hộp thư hỗ trợ khách hàng' : 'Customer Support Chat'}
+                  </h2>
+                  
+                  <div className="bg-white border border-gray-150 rounded-2xl overflow-hidden shadow-sm flex h-[480px]">
+                    {/* Left column: Partners list */}
+                    <div className="w-1/3 border-r border-gray-150 flex flex-col">
+                      <div className="p-3 border-b border-gray-100 bg-gray-50/50">
+                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Danh sách hội thoại</p>
+                      </div>
+                      <div className="flex-grow overflow-y-auto divide-y divide-gray-50">
+                        {partnersLoading ? (
+                          <div className="flex justify-center py-10">
+                            <div className="w-5 h-5 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+                          </div>
+                        ) : chatPartners.length === 0 ? (
+                          <p className="text-gray-400 text-xs italic text-center py-10">Chưa có tin nhắn nào.</p>
+                        ) : (
+                          chatPartners.map(p => (
+                            <button
+                              key={p.partner_id}
+                              onClick={() => {
+                                setActivePartner(p);
+                                fetchChatHistory(p.partner_id);
+                              }}
+                              className={`w-full text-left p-3 flex flex-col gap-1 transition ${
+                                activePartner?.partner_id === p.partner_id ? 'bg-red-50 text-red-650 font-bold' : 'hover:bg-gray-50'
+                              }`}
+                            >
+                              <div className="flex justify-between items-center w-full">
+                                <span className="font-bold text-xs truncate text-gray-800">{p.partner_name}</span>
+                                <span className="text-[9px] text-gray-400">Khách hàng</span>
+                              </div>
+                              <p className="text-[10px] text-gray-400 truncate w-full">{p.last_message}</p>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right column: Message history and input */}
+                    <div className="w-2/3 flex flex-col justify-between bg-gray-50/30">
+                      {activePartner ? (
+                        <>
+                          {/* Header */}
+                          <div className="p-3 border-b border-gray-155 bg-white flex justify-between items-center">
+                            <div>
+                              <span className="font-bold text-xs text-gray-800">{activePartner.partner_name}</span>
+                              <p className="text-[9px] text-gray-400">Đang trò chuyện</p>
+                            </div>
+                          </div>
+
+                          {/* History messages */}
+                          <div className="flex-grow overflow-y-auto p-4 space-y-3 flex flex-col">
+                            {messagesLoading && chatMessages.length === 0 ? (
+                              <div className="flex justify-center py-10">
+                                <div className="w-6 h-6 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+                              </div>
+                            ) : (
+                              chatMessages.map(msg => {
+                                const isMe = msg.sender_id === user.id;
+                                return (
+                                  <div
+                                    key={msg.id}
+                                    className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}
+                                  >
+                                    <div className={`max-w-[70%] rounded-2xl px-4 py-2 text-xs font-medium shadow-sm leading-relaxed ${
+                                      isMe 
+                                        ? 'bg-red-600 text-white rounded-tr-none' 
+                                        : 'bg-white text-gray-800 border border-gray-150 rounded-tl-none'
+                                    }`}>
+                                      <p>{msg.message}</p>
+                                      <span className={`text-[8px] mt-0.5 block text-right ${isMe ? 'text-white/60' : 'text-gray-400'}`}>
+                                        {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+
+                          {/* Input box */}
+                          <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-gray-150 flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="Nhập nội dung tin nhắn..."
+                              value={chatInput}
+                              onChange={(e) => setChatInput(e.target.value)}
+                              className="flex-grow px-3 py-2 border border-gray-200 rounded-xl text-xs outline-none focus:border-red-500 bg-gray-50/50 focus:bg-white"
+                            />
+                            <button
+                              type="submit"
+                              className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition shadow flex-shrink-0"
+                            >
+                              Gửi
+                            </button>
+                          </form>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-2">
+                          <div className="text-3xl">💬</div>
+                          <p className="text-xs font-semibold">Chọn một cuộc trò chuyện bên trái để bắt đầu hỗ trợ khách hàng.</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

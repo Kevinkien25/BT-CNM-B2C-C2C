@@ -37,6 +37,7 @@ async function initDB() {
         phone VARCHAR(50) NOT NULL,
         tax_code VARCHAR(100) DEFAULT NULL,
         is_approved TINYINT(1) DEFAULT 0,
+        reject_reason VARCHAR(255) DEFAULT NULL,
         banner_url VARCHAR(500) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
@@ -78,6 +79,12 @@ async function initDB() {
     try {
       await pool.query('ALTER TABLE shops ADD COLUMN banner_url VARCHAR(500) DEFAULT NULL');
       console.log("Self-healing: Added missing 'banner_url' column to shops table.");
+    } catch (e) {
+      // Ignore error if column already exists
+    }
+    try {
+      await pool.query('ALTER TABLE shops ADD COLUMN reject_reason VARCHAR(255) DEFAULT NULL');
+      console.log("Self-healing: Added missing 'reject_reason' column to shops table.");
     } catch (e) {
       // Ignore error if column already exists
     }

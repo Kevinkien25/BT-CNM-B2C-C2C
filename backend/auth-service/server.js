@@ -124,8 +124,8 @@ app.get('/api/auth/wallet', authenticateToken, async (req, res) => {
   try {
     let [wallets] = await db.query('SELECT * FROM wallets WHERE user_id = ?', [req.user.id]);
     if (wallets.length === 0) {
-      // Auto-create wallet with a default test balance (50,000,000 VND)
-      await db.query('INSERT INTO wallets (user_id, balance) VALUES (?, ?)', [req.user.id, 50000000.00]);
+      // Auto-create wallet with a default balance (0 VND)
+      await db.query('INSERT INTO wallets (user_id, balance) VALUES (?, ?)', [req.user.id, 0.00]);
       const [newWallets] = await db.query('SELECT * FROM wallets WHERE user_id = ?', [req.user.id]);
       wallets = newWallets;
     }
@@ -216,7 +216,7 @@ app.post('/api/auth/wallet/pay-internal', async (req, res) => {
     await conn.beginTransaction();
     let [wallets] = await conn.query('SELECT id, balance FROM wallets WHERE user_id = ? FOR UPDATE', [user_id]);
     if (wallets.length === 0) {
-      await conn.query('INSERT INTO wallets (user_id, balance) VALUES (?, ?)', [user_id, 50000000.00]); // Auto-create with test balance to let them pay
+      await conn.query('INSERT INTO wallets (user_id, balance) VALUES (?, ?)', [user_id, 0.00]); // Auto-create with default balance of 0 VND
       const [newWallets] = await conn.query('SELECT id, balance FROM wallets WHERE user_id = ? FOR UPDATE', [user_id]);
       wallets = newWallets;
     }
@@ -342,6 +342,72 @@ app.put('/api/auth/admin/users/:id/status', authenticateToken, requireRole(['adm
     res.json({ message: 'Cập nhật trạng thái tài khoản thành công.' });
   } catch (err) {
     res.status(500).json({ message: 'Lỗi.' });
+  }
+});
+
+// --- User-to-User Chat Routes (P2P Chat) ---
+
+// 1. Send Message
+app.post('/api/auth/chat/send', authenticateToken, async (req, res) => {
+  const { receiverId, message } = req.body;
+  if (!receiverId || !message || !message.trim()) {
+    return res.status(400).json({ message: 'Vui lòng cung cấp receiverId và nội dung tin nhắn.' });
+  }
+
+  try {
+    await db.query(
+      'INSERT INTO messages (sender_id, receiver_id, message) VALUES (?, ?, ?)',
+      [req.user.id, Number(receiverId), message.trim()]
+    );
+    res.json({ success: true, message: 'Đã gửi tin nhắn thành công.' });
+  } catch (err) {
+    console.error("Lỗi gửi tin nhắn:", err);
+    res.status(500).json({ message: 'Lỗi hệ thống khi gửi tin nhắn.' });
+  }
+});
+
+// 2. Get Chat History with a Specific User
+app.get('/api/auth/chat/history/:partnerId', authenticateToken, async (req, res) => {
+  const { partnerId } = req.params;
+  try {
+    const [messages] = await db.query(
+      `SELECT * FROM messages
+       WHERE (sender_id = ? AND receiver_id = ?)
+          OR (sender_id = ? AND receiver_id = ?)
+       ORDER BY created_at ASC`,
+      [req.user.id, Number(partnerId), Number(partnerId), req.user.id]
+    );
+    res.json({ messages });
+  } catch (err) {
+    console.error("Lỗi lấy lịch sử chat:", err);
+    res.status(500).json({ message: 'Lỗi hệ thống khi lấy lịch sử chat.' });
+  }
+});
+
+// 3. Get Chat Partners List (with last message and partner details)
+app.get('/api/auth/chat/partners', authenticateToken, async (req, res) => {
+  try {
+    const [partners] = await db.query(
+      `SELECT u.id AS partner_id, u.name AS partner_name, u.email AS partner_email, u.role AS partner_role,
+              m.message AS last_message, m.created_at AS last_message_time
+       FROM users u
+       JOIN (
+         SELECT partner_id, MAX(msg_id) AS max_msg_id
+         FROM (
+           SELECT id AS msg_id, receiver_id AS partner_id FROM messages WHERE sender_id = ?
+           UNION
+           SELECT id AS msg_id, sender_id AS partner_id FROM messages WHERE receiver_id = ?
+         ) AS temp
+         GROUP BY partner_id
+       ) AS last_msgs ON u.id = last_msgs.partner_id
+       JOIN messages m ON last_msgs.max_msg_id = m.id
+       ORDER BY m.created_at DESC`,
+      [req.user.id, req.user.id]
+    );
+    res.json({ partners });
+  } catch (err) {
+    console.error("Lỗi lấy danh sách đối tác chat:", err);
+    res.status(500).json({ message: 'Lỗi hệ thống khi lấy danh sách hội thoại.' });
   }
 });
 

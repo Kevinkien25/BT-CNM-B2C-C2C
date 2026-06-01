@@ -91,12 +91,12 @@ export default function Cart() {
                 </div>
                 <div className="flex justify-between text-gray-600">
                   <span>Phí vận chuyển:</span>
-                  <span className="text-green-600 font-medium">Miễn phí</span>
+                  <span className="font-bold">30.000 đ</span>
                 </div>
                 <hr className="border-gray-100" />
                 <div className="flex justify-between text-gray-800 text-base">
                   <span className="font-bold">Tổng thanh toán:</span>
-                  <span className="font-black text-red-600 text-lg">{totalAmount.toLocaleString('vi-VN')} đ</span>
+                  <span className="font-black text-red-600 text-lg">{(totalAmount + 30000).toLocaleString('vi-VN')} đ</span>
                 </div>
               </div>
 

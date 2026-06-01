@@ -102,31 +102,7 @@ export default function Register() {
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-gray-600 uppercase">Vai trò tài khoản</label>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 transition-all bg-white"
-              >
-                <option value="buyer">Người Mua (Chỉ mua hàng)</option>
-                <option value="c2c_seller">Người Bán Cá Nhân C2C (Bán thanh lý đồ cũ)</option>
-                <option value="b2c_seller">Doanh Nghiệp B2C (Hàng chính hãng Red Mall)</option>
-              </select>
-            </div>
-
-            {/* Dynamic role helper note */}
-            <div className="p-3.5 bg-red-50/50 rounded-2xl border border-red-100/50 text-[11px] text-gray-600 leading-relaxed">
-              {role === 'buyer' && (
-                <p>🛒 <strong>Người Mua:</strong> Phục vụ nhu cầu lướt xem hàng, thêm vào giỏ, đặt mua hàng và thanh toán bảo vệ qua cơ chế Escrow của sàn.</p>
-              )}
-              {role === 'c2c_seller' && (
-                <p>🙋‍♂️ <strong>Người Bán Cá Nhân C2C:</strong> Dành cho cá nhân thanh lý quần áo, điện thoại cũ,... Cửa hàng của bạn được duyệt ngay sau khi tạo shop. Không yêu cầu Mã số thuế.</p>
-              )}
-              {role === 'b2c_seller' && (
-                <p>🏢 <strong>Doanh Nghiệp B2C:</strong> Dành cho cửa hàng có đăng ký kinh doanh. Yêu cầu nhập Mã số thuế khi tạo shop. Cần được <strong>Admin phê duyệt</strong> để hiển thị logo <strong>MALL</strong> chính hãng màu đỏ trên sản phẩm.</p>
-              )}
-            </div>
+            {/* Tài khoản mặc định đăng ký dưới vai trò Người Mua */}
 
             <button
               type="submit"

@@ -19,7 +19,7 @@ app.get('/api/orders/health', (req, res) => {
 
 // 1. Đặt hàng (Thanh toán Ví, COD, hoặc Escrow qua tài khoản sàn)
 app.post('/api/orders', authenticateToken, async (req, res) => {
-  const { items, shipping_address, payment_method, shipping_partner, shipping_fee, voucher_code } = req.body;
+  const { items, shipping_address, payment_method, shipping_partner, shipping_fee, voucher_code, discount } = req.body;
 
   if (!items || !Array.isArray(items) || items.length === 0 || !shipping_address) {
     return res.status(400).json({ message: 'Vui lòng cung cấp danh sách sản phẩm và địa chỉ.' });
@@ -61,7 +61,8 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
     }
 
     // Áp dụng phí vận chuyển
-    const finalAmount = totalAmount + Number(shipping_fee || 0);
+    // Áp dụng phí vận chuyển và trừ tiền giảm giá voucher
+    const finalAmount = Math.max(0, totalAmount + Number(shipping_fee || 0) - Number(discount || 0));
 
     // Nếu chọn thanh toán bằng Ví điện tử (Wallet): Gọi Auth Service để trừ tiền ví người mua
     if (payment_method === 'Wallet') {

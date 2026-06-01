@@ -2,19 +2,41 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useApp } from '@/context/AppContext';
 import { useLanguage } from '@/context/LanguageContext';
 
 export default function BuyerDashboard() {
-  const { token, backendUrl, user, loading } = useApp();
+  const { token, backendUrl, user, loading, refreshUser } = useApp();
   const { t, language } = useLanguage();
   const router = useRouter();
 
-  // Tab State: 'orders' | 'wallet' | 'addresses' | 'favourites'
+  // Tab State: 'orders' | 'wallet' | 'addresses' | 'favourites' | 'chat' | 'notifications' | 'profile'
   const [activeTab, setActiveTab] = useState('orders');
+
+  const searchParams = useSearchParams();
+  const sellerIdParam = searchParams?.get('sellerId');
+  const sellerNameParam = searchParams?.get('sellerName');
+  const tabParam = searchParams?.get('tab');
+
+  // Chat states
+  const [chatPartners, setChatPartners] = useState([]);
+  const [activePartner, setActivePartner] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [partnersLoading, setPartnersLoading] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+
+  // Profile states
+  const [profileName, setProfileName] = useState(user?.name || '');
+  const [profileEmail, setProfileEmail] = useState(user?.email || '');
+  const [profilePassword, setProfilePassword] = useState('');
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  // Notifications state
+  const [notifs, setNotifs] = useState([]);
 
   // Orders State
   const [orders, setOrders] = useState([]);
@@ -41,6 +63,174 @@ export default function BuyerDashboard() {
 
   // Favourites State
   const [favourites, setFavourites] = useState([]);
+
+  // Fetch partners list
+  const fetchPartners = async () => {
+    setPartnersLoading(true);
+    try {
+      const res = await fetch(`${backendUrl}/api/auth/chat/partners`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setChatPartners(data.partners || []);
+      return data.partners || [];
+    } catch (err) {
+      console.warn("Failed to fetch chat partners");
+      setChatPartners([]);
+      return [];
+    } finally {
+      setPartnersLoading(false);
+    }
+  };
+
+  // Fetch chat history
+  const fetchChatHistory = async (partnerId) => {
+    setMessagesLoading(true);
+    try {
+      const res = await fetch(`${backendUrl}/api/auth/chat/history/${partnerId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setChatMessages(data.messages || []);
+    } catch (err) {
+      console.warn("Failed to fetch chat history");
+      setChatMessages([]);
+    } finally {
+      setMessagesLoading(false);
+    }
+  };
+
+  // Send message
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!activePartner || !chatInput.trim()) return;
+
+    const partnerId = activePartner.partner_id;
+    const msgText = chatInput.trim();
+    setChatInput('');
+
+    // Optimistically add to messages list
+    const tempMsg = {
+      id: Date.now(),
+      sender_id: user.id,
+      receiver_id: partnerId,
+      message: msgText,
+      created_at: new Date().toISOString()
+    };
+    setChatMessages(prev => [...prev, tempMsg]);
+
+    try {
+      const res = await fetch(`${backendUrl}/api/auth/chat/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ receiverId: partnerId, message: msgText })
+      });
+      if (!res.ok) throw new Error();
+      
+      // Refresh partners list
+      fetchPartners();
+    } catch (err) {
+      console.error("Failed to send message:", err.message);
+    }
+  };
+
+  // Handle Profile Update
+  const handleUpdateProfile = async (e) => {
+    e.preventDefault();
+    setProfileLoading(true);
+    try {
+      const body = { name: profileName, email: profileEmail };
+      if (profilePassword) body.password = profilePassword;
+
+      const res = await fetch(`${backendUrl}/api/auth/profile`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      
+      alert(language === 'vi' ? "Cập nhật hồ sơ thành công!" : "Profile updated successfully!");
+      setProfilePassword('');
+      refreshUser();
+    } catch (err) {
+      alert("Lỗi: " + err.message);
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  // Sync profile form when user context changes
+  useEffect(() => {
+    if (user) {
+      setProfileName(user.name);
+      setProfileEmail(user.email);
+    }
+  }, [user]);
+
+  // Handle Tab and SellerId from query parameters
+  useEffect(() => {
+    if (loading) return;
+    if (tabParam) {
+      setActiveTab(tabParam);
+    }
+
+    if (tabParam === 'chat' && sellerIdParam) {
+      const initChat = async () => {
+        const currentPartners = await fetchPartners();
+        const found = currentPartners.find(p => p.partner_id.toString() === sellerIdParam.toString());
+        
+        if (found) {
+          setActivePartner(found);
+          fetchChatHistory(found.partner_id);
+        } else {
+          // If seller is not in conversation list, add a temporary partner at the top
+          const tempPartner = {
+            partner_id: Number(sellerIdParam),
+            partner_name: sellerNameParam || 'Chủ shop Bán Hàng',
+            partner_email: '',
+            partner_role: 'seller',
+            last_message: 'Bắt đầu cuộc trò chuyện mới...',
+            last_message_time: new Date().toISOString()
+          };
+          setChatPartners(prev => [tempPartner, ...prev]);
+          setActivePartner(tempPartner);
+          setChatMessages([]);
+        }
+      };
+      initChat();
+    } else if (activeTab === 'chat') {
+      fetchPartners();
+    }
+  }, [tabParam, sellerIdParam, activeTab, loading]);
+
+  // Generate dummy notifications list based on orders or system announcements
+  useEffect(() => {
+    if (activeTab === 'notifications' && user) {
+      const list = [
+        { id: 1, title: '🔔 Đăng ký thành công', body: `Chào mừng ${user.name} gia nhập RedMall! Ví điện tử của bạn đã được kích hoạt thành công với số dư 0 đ.`, time: new Date(Date.now() - 86400000).toLocaleString() },
+        { id: 2, title: '🎁 Khuyến mãi cực sốc B2C Mall', body: 'Nhập mã GIAM30K để được giảm ngay 30,000 đ cho các đơn hàng Mall có giá trị từ 150K!', time: new Date(Date.now() - 36000000).toLocaleString() }
+      ];
+      orders.forEach(ord => {
+        if (ord.status === 'shipped') {
+          list.unshift({ id: `ord_shipped_${ord.id}`, title: '🚚 Đơn hàng đang được giao', body: `Đơn hàng #${ord.id} chứa sản phẩm của bạn đang được đơn vị vận chuyển GHN giao tới.`, time: new Date(ord.created_at).toLocaleString() });
+        } else if (ord.status === 'delivered') {
+          list.unshift({ id: `ord_deliv_${ord.id}`, title: '🎉 Giao hàng thành công', body: `Đơn hàng #${ord.id} đã hoàn tất giao nhận và giải ngân tiền bảo chứng.`, time: new Date(ord.created_at).toLocaleString() });
+        }
+      });
+      setNotifs(list);
+    }
+  }, [activeTab, orders, user]);
+
+
 
   useEffect(() => {
     if (loading) return;
@@ -370,7 +560,10 @@ export default function BuyerDashboard() {
                 { id: 'orders', label: t('orders'), icon: '📦' },
                 { id: 'wallet', label: t('wallet_title'), icon: '💳' },
                 { id: 'addresses', label: t('address_title'), icon: '📍' },
-                { id: 'favourites', label: language === 'vi' ? 'Sản phẩm yêu thích' : 'Favorite Products', icon: '❤️' }
+                { id: 'favourites', label: language === 'vi' ? 'Sản phẩm yêu thích' : 'Favorite Products', icon: '❤️' },
+                { id: 'chat', label: language === 'vi' ? 'Tin nhắn' : 'Messages', icon: '💬' },
+                { id: 'notifications', label: language === 'vi' ? 'Thông báo' : 'Notifications', icon: '🔔' },
+                { id: 'profile', label: language === 'vi' ? 'Hồ sơ cá nhân' : 'Profile Settings', icon: '👤' }
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -837,6 +1030,203 @@ export default function BuyerDashboard() {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* CHAT TAB */}
+            {activeTab === 'chat' && (
+              <div className="space-y-6">
+                <h2 className="text-xl font-black text-gray-800 tracking-tight uppercase mb-4">Hộp thư nhắn tin</h2>
+                
+                <div className="bg-white border border-gray-150 rounded-2xl overflow-hidden shadow-sm flex h-[480px]">
+                  {/* Left column: Partners list */}
+                  <div className="w-1/3 border-r border-gray-150 flex flex-col">
+                    <div className="p-3 border-b border-gray-100 bg-gray-50/50">
+                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Danh sách hội thoại</p>
+                    </div>
+                    <div className="flex-grow overflow-y-auto divide-y divide-gray-50">
+                      {partnersLoading ? (
+                        <div className="flex justify-center py-10">
+                          <div className="w-5 h-5 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                      ) : chatPartners.length === 0 ? (
+                        <p className="text-gray-400 text-xs italic text-center py-10">Chưa có tin nhắn nào.</p>
+                      ) : (
+                        chatPartners.map(p => (
+                          <button
+                            key={p.partner_id}
+                            onClick={() => {
+                              setActivePartner(p);
+                              fetchChatHistory(p.partner_id);
+                            }}
+                            className={`w-full text-left p-3 flex flex-col gap-1 transition ${
+                              activePartner?.partner_id === p.partner_id ? 'bg-red-50 text-red-650 font-bold' : 'hover:bg-gray-50'
+                            }`}
+                          >
+                            <div className="flex justify-between items-center w-full">
+                              <span className="font-bold text-xs truncate text-gray-800">{p.partner_name}</span>
+                              <span className="text-[9px] text-gray-400">
+                                {p.partner_role === 'seller' ? 'Người bán' : 'Người mua'}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-gray-400 truncate w-full">{p.last_message}</p>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right column: Message history and input */}
+                  <div className="w-2/3 flex flex-col justify-between bg-gray-50/30">
+                    {activePartner ? (
+                      <>
+                        {/* Header */}
+                        <div className="p-3 border-b border-gray-150 bg-white flex justify-between items-center">
+                          <div>
+                            <span className="font-bold text-xs text-gray-800">{activePartner.partner_name}</span>
+                            <p className="text-[9px] text-gray-400">Đang hoạt động</p>
+                          </div>
+                        </div>
+
+                        {/* History messages */}
+                        <div className="flex-grow overflow-y-auto p-4 space-y-3 flex flex-col">
+                          {messagesLoading && chatMessages.length === 0 ? (
+                            <div className="flex justify-center py-10">
+                              <div className="w-6 h-6 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+                            </div>
+                          ) : (
+                            chatMessages.map(msg => {
+                              const isMe = msg.sender_id === user.id;
+                              return (
+                                <div
+                                  key={msg.id}
+                                  className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}
+                                >
+                                  <div className={`max-w-[70%] rounded-2xl px-4 py-2 text-xs font-medium shadow-sm leading-relaxed ${
+                                    isMe 
+                                      ? 'bg-red-600 text-white rounded-tr-none' 
+                                      : 'bg-white text-gray-800 border border-gray-150 rounded-tl-none'
+                                  }`}>
+                                    <p>{msg.message}</p>
+                                    <span className={`text-[8px] mt-0.5 block text-right ${isMe ? 'text-white/60' : 'text-gray-400'}`}>
+                                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+
+                        {/* Input box */}
+                        <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-gray-150 flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="Nhập nội dung tin nhắn..."
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            className="flex-grow px-3 py-2 border border-gray-200 rounded-xl text-xs outline-none focus:border-red-500 bg-gray-50/50 focus:bg-white"
+                          />
+                          <button
+                            type="submit"
+                            className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition shadow flex-shrink-0"
+                          >
+                            Gửi
+                          </button>
+                        </form>
+                      </>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-2">
+                        <div className="text-3xl">💬</div>
+                        <p className="text-xs font-semibold">Chọn một hội thoại bên trái để bắt đầu chat.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* NOTIFICATIONS TAB */}
+            {activeTab === 'notifications' && (
+              <div className="space-y-6">
+                <h2 className="text-xl font-black text-gray-800 tracking-tight uppercase mb-4">Thông báo & Khuyến mãi</h2>
+                
+                <div className="space-y-4">
+                  {notifs.length === 0 ? (
+                    <p className="text-gray-400 text-xs italic bg-white border border-gray-155 rounded-2xl p-6 text-center shadow-sm">
+                      Chưa có thông báo nào.
+                    </p>
+                  ) : (
+                    notifs.map(n => (
+                      <div key={n.id} className="bg-white border border-gray-150 p-4 rounded-2xl shadow-sm flex items-start gap-4 hover:shadow-md transition">
+                        <span className="text-xl bg-red-50 p-2.5 rounded-xl flex-shrink-0 text-red-600">🔔</span>
+                        <div className="space-y-1 text-xs">
+                          <p className="font-bold text-gray-800 text-sm">{n.title}</p>
+                          <p className="text-gray-500 leading-relaxed font-medium">{n.body}</p>
+                          <span className="text-[10px] text-gray-400 block mt-1">{n.time}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* PROFILE TAB */}
+            {activeTab === 'profile' && (
+              <div className="space-y-6">
+                <h2 className="text-xl font-black text-gray-800 tracking-tight uppercase mb-4">Hồ sơ cá nhân</h2>
+                
+                <div className="bg-white border border-gray-150 rounded-2xl p-6 shadow-sm max-w-xl">
+                  <form onSubmit={handleUpdateProfile} className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-gray-600 uppercase">Họ và tên</label>
+                      <input
+                        type="text"
+                        value={profileName}
+                        onChange={(e) => setProfileName(e.target.value)}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 transition-all bg-gray-50/30"
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-gray-600 uppercase">Địa chỉ Email</label>
+                      <input
+                        type="email"
+                        value={profileEmail}
+                        onChange={(e) => setProfileEmail(e.target.value)}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 transition-all bg-gray-50/30"
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-gray-600 uppercase">Mật khẩu mới (Bỏ trống nếu giữ nguyên)</label>
+                      <input
+                        type="password"
+                        placeholder="••••••••"
+                        value={profilePassword}
+                        onChange={(e) => setProfilePassword(e.target.value)}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 transition-all bg-gray-50/30"
+                      />
+                    </div>
+
+                    <div className="flex justify-end pt-2">
+                      <button
+                        type="submit"
+                        disabled={profileLoading}
+                        className="bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-6 rounded-xl text-xs shadow-md transition flex items-center justify-center"
+                      >
+                        {profileLoading ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          'Cập nhật thông tin'
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
               </div>
             )}
           </section>

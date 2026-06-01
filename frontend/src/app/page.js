@@ -22,35 +22,58 @@ function HomeContent() {
   
   // Slide Banner State
   const [currentSlide, setCurrentSlide] = useState(0);
-  const slides = [
-    {
-      title: language === 'vi' ? "HỘI CHỢ MUA BÁN C2C - ĐỒ CŨ GIÁ TỐT" : "C2C MARKET - GREAT SECOND-HAND DEALS",
-      description: language === 'vi' 
-        ? "Thanh lý đồ cũ nhanh chóng, mua sắm thả ga với cơ chế giữ tiền an toàn tuyệt đối."
-        : "Liquidate used goods quickly, shop with peace of mind using our secure payment protection.",
-      bg: "bg-gradient-to-r from-red-600 to-red-800",
-      image: "https://images.unsplash.com/photo-1472851294608-062f824d29cc?w=600&auto=format&fit=crop&q=80"
-    },
-    {
-      title: language === 'vi' ? "GIAN HÀNG CHÍNH HÃNG B2C - RED MALL" : "OFFICIAL B2C STORES - RED MALL",
-      description: language === 'vi'
-        ? "Mua sắm thiết bị công nghệ chính hãng từ doanh nghiệp uy tín, bảo hành chuẩn hãng."
-        : "Shop official tech products and electronics from verified businesses with official warranties.",
-      bg: "bg-gradient-to-r from-gray-800 to-red-950",
-      image: "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=600&auto=format&fit=crop&q=80"
-    },
-    {
-      title: language === 'vi' ? "TỰ ĐỘNG VIẾT MÔ TẢ BẰNG GEMINI AI" : "AUTO-GENERATE DESCRIPTIONS WITH AI",
-      description: language === 'vi'
-        ? "Người bán C2C chỉ cần nhập tên sản phẩm, AI sẽ soạn thảo bài đăng hấp dẫn và chuẩn SEO."
-        : "C2C Sellers only need to input product names; our AI drafts attractive, SEO-ready descriptions instantly.",
-      bg: "bg-gradient-to-r from-red-500 to-pink-700",
-      image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80"
+  const [slides, setSlides] = useState([]);
+
+  useEffect(() => {
+    // Dynamic SEO
+    const seoStored = localStorage.getItem('system_seo');
+    if (seoStored) {
+      const seo = JSON.parse(seoStored);
+      if (seo.title) document.title = seo.title;
+      if (seo.description) {
+        const metaDesc = document.querySelector('meta[name="description"]');
+        if (metaDesc) metaDesc.setAttribute('content', seo.description);
+      }
     }
-  ];
+
+    // Dynamic Banners
+    const bannersStored = localStorage.getItem('system_banners');
+    if (bannersStored) {
+      setSlides(JSON.parse(bannersStored));
+    } else {
+      const defaults = [
+        {
+          title: language === 'vi' ? "HỘI CHỢ MUA BÁN C2C - ĐỒ CŨ GIÁ TỐT" : "C2C MARKET - GREAT SECOND-HAND DEALS",
+          description: language === 'vi' 
+            ? "Thanh lý đồ cũ nhanh chóng, mua sắm thả ga với cơ chế giữ tiền an toàn tuyệt đối."
+            : "Liquidate used goods quickly, shop with peace of mind using our secure payment protection.",
+          bg: "bg-gradient-to-r from-red-600 to-red-800",
+          image: "https://images.unsplash.com/photo-1472851294608-062f824d29cc?w=600&auto=format&fit=crop&q=80"
+        },
+        {
+          title: language === 'vi' ? "GIAN HÀNG CHÍNH HÃNG B2C - RED MALL" : "OFFICIAL B2C STORES - RED MALL",
+          description: language === 'vi'
+            ? "Mua sắm thiết bị công nghệ chính hãng từ doanh nghiệp uy tín, bảo hành chuẩn hãng."
+            : "Shop official tech products and electronics from verified businesses with official warranties.",
+          bg: "bg-gradient-to-r from-gray-800 to-red-950",
+          image: "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=600&auto=format&fit=crop&q=80"
+        },
+        {
+          title: language === 'vi' ? "TỰ ĐỘNG VIẾT MÔ TẢ BẰNG GEMINI AI" : "AUTO-GENERATE DESCRIPTIONS WITH AI",
+          description: language === 'vi'
+            ? "Người bán C2C chỉ cần nhập tên sản phẩm, AI sẽ soạn thảo bài đăng hấp dẫn và chuẩn SEO."
+            : "C2C Sellers only need to input product names; our AI drafts attractive, SEO-ready descriptions instantly.",
+          bg: "bg-gradient-to-r from-red-500 to-pink-700",
+          image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80"
+        }
+      ];
+      setSlides(defaults);
+    }
+  }, [language]);
 
   // Auto-scroll slides
   useEffect(() => {
+    if (slides.length === 0) return;
     const timer = setInterval(() => {
       setCurrentSlide(prev => (prev + 1) % slides.length);
     }, 5000);
