@@ -59,8 +59,8 @@ const CHATBOT_RULES = [
   },
   {
     keywords: ['đổi trả', 'hoàn tiền', 'khiếu nại', 'tranh chấp', 'refund', 'dispute', 'return'],
-    response_vi: 'Chính sách bảo vệ người mua (Escrow) đảm bảo số tiền thanh toán được sàn giữ an toàn. Nếu sản phẩm lỗi hoặc không đúng mô tả, bạn có thể gửi yêu cầu "Khiếu nại/Hoàn trả" trong mục chi tiết đơn hàng. Ban quản trị (Admin) sẽ làm trọng tài phân giải và hoàn tiền hoặc giải ngân cho người bán.',
-    response_en: 'Our Buyer Protection policy (Escrow) secures payments until receipt. If a product is defective or not as described, you can submit a "Dispute/Refund" request in the order details. The Admin will act as arbiter to refund your wallet or release funds to the seller.'
+    response_vi: 'Chính sách bảo vệ người mua đảm bảo số tiền thanh toán được sàn giữ an toàn. Nếu sản phẩm lỗi hoặc không đúng mô tả, bạn có thể gửi yêu cầu "Khiếu nại/Hoàn trả" trong mục chi tiết đơn hàng. Ban quản trị (Admin) sẽ làm trọng tài phân giải và hoàn tiền hoặc giải ngân cho người bán.',
+    response_en: 'Our Buyer Protection policy secures payments until receipt. If a product is defective or not as described, you can submit a "Dispute/Refund" request in the order details. The Admin will act as arbiter to refund your wallet or release funds to the seller.'
   },
   {
     keywords: ['vận chuyển', 'giao hàng', 'ship', 'ghn', 'ghtk', 'viettelpost', 'delivery'],
@@ -85,11 +85,11 @@ function getFallbackResponse(message) {
 
   return `Chào bạn! Tôi là Trợ lý AI của hệ thống thương mại điện tử C2C/B2C. Tôi có thể giúp gì cho bạn?\n` +
          `- Hỏi về ví điện tử nội bộ, nạp/rút tiền.\n` +
-         `- Hỏi về chính sách đổi trả, tranh chấp Escrow.\n` +
+         `- Hỏi về chính sách đổi trả, tranh chấp đơn hàng.\n` +
          `- Hỏi về phân loại người bán C2C và B2C Mall.\n` +
          `- Hỏi về giao hàng, phí vận chuyển.\n\n` +
          `*(English)*:\n` +
-         `Hello! I am the AI Assistant for this C2C/B2C e-commerce platform. How can I help you today? You can ask about internal wallets, returns/escrow disputes, B2C/C2C accounts, or shipping options.`;
+         `Hello! I am the AI Assistant for this C2C/B2C e-commerce platform. How can I help you today? You can ask about internal wallets, returns/disputes, B2C/C2C accounts, or shipping options.`;
 }
 
 // ---------------- API Routes ----------------
@@ -116,7 +116,7 @@ app.post('/api/chatbot', async (req, res) => {
       // Structure system prompt and history
       const systemInstruction = 
         `Bạn là trợ lý AI (chatbot) thông minh và thân thiện của hệ thống thương mại điện tử C2C và B2C song ngữ.\n` +
-        `Nhiệm vụ của bạn là tư vấn sản phẩm, giải đáp thắc mắc về đơn hàng, ví tiền, chính sách thanh toán bảo chứng Escrow, khiếu nại hoàn trả, đăng ký shop Mall B2C, và phí vận chuyển quốc tế.\n` +
+        `Nhiệm vụ của bạn là tư vấn sản phẩm, giải đáp thắc mắc về đơn hàng, ví tiền, chính sách thanh toán bảo đảm, khiếu nại hoàn trả, đăng ký shop Mall B2C, và phí vận chuyển quốc tế.\n` +
         `Trả lời bằng ngôn ngữ người dùng hỏi (Tiếng Việt hoặc Tiếng Anh). Nếu người dùng dùng tiếng Việt, trả lời bằng tiếng Việt lịch sự, chi tiết.`;
 
       const prompt = `${systemInstruction}\n\nLịch sử chat:\n${

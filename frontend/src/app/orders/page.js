@@ -9,7 +9,7 @@ import { useApp } from '@/context/AppContext';
 import { useLanguage } from '@/context/LanguageContext';
 
 export default function BuyerDashboard() {
-  const { token, backendUrl, user } = useApp();
+  const { token, backendUrl, user, loading } = useApp();
   const { t, language } = useLanguage();
   const router = useRouter();
 
@@ -43,6 +43,7 @@ export default function BuyerDashboard() {
   const [favourites, setFavourites] = useState([]);
 
   useEffect(() => {
+    if (loading) return;
     if (!token) {
       router.push('/login');
       return;
@@ -52,7 +53,7 @@ export default function BuyerDashboard() {
     if (activeTab === 'wallet') fetchWalletData();
     if (activeTab === 'addresses') fetchAddresses();
     if (activeTab === 'favourites') loadFavourites();
-  }, [token, activeTab]);
+  }, [token, activeTab, loading]);
 
   // --- Orders Logic ---
   const fetchBuyerOrders = async () => {
@@ -344,6 +345,14 @@ export default function BuyerDashboard() {
     return map[status] || { text: status, color: 'bg-gray-50 text-gray-800 border-gray-200' };
   };
 
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center space-y-4 bg-gray-50">
+        <div className="w-12 h-12 border-4 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
   return (
     <>
       <Header />
@@ -447,9 +456,9 @@ export default function BuyerDashboard() {
                             {order.transaction_status && (
                               <div className="space-y-3">
                                 <div className={`p-3 rounded-xl border text-xs font-bold flex flex-col sm:flex-row justify-between items-center gap-3 ${escrowStatus.color}`}>
-                                  <span>🛡️ Trạng thái Escrow: {order.dispute_pending ? t('dispute_pending') : escrowStatus.text}</span>
+                                  <span>🛡️ Trạng thái giao dịch: {order.dispute_pending ? t('dispute_pending') : escrowStatus.text}</span>
                                   
-                                  {order.status !== 'delivered' && order.status !== 'cancelled' && order.transaction_status === 'escrow' && !order.dispute_pending && (
+                                  {order.status === 'shipped' && !order.dispute_pending && (
                                     <div className="flex gap-2">
                                       <button
                                         onClick={() => handleConfirmReceipt(order.id)}

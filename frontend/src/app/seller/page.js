@@ -133,13 +133,11 @@ export default function SellerDashboard() {
         if (!shop) return;
         setOrdLoading(true);
         try {
-          const res = await fetch(`${backendUrl}/api/orders/my-orders`); // Demo handles filtering internally or we use mock
+          const res = await fetch(`${backendUrl}/api/orders/seller`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
           const data = await res.json();
-          // Filter orders where product belongs to seller's shop
-          const filtered = (data.orders || []).filter(ord => 
-            ord.items.some(item => item.shop_name === shop.shop_name)
-          );
-          setShopOrders(filtered);
+          setShopOrders(data.orders || []);
         } catch (err) {
           console.warn("Using mock shop orders.");
           setShopOrders([
@@ -148,7 +146,7 @@ export default function SellerDashboard() {
               total_amount: 5200000,
               status: 'shipped',
               shipping_address: 'Nguyễn Văn Mua - 0912345678 - 123 Đường Láng, Hà Nội',
-              payment_method: 'Escrow',
+              payment_method: 'Wallet',
               shipping_partner: 'GHN',
               shipping_fee: 30000,
               created_at: new Date(Date.now() - 3600000).toISOString(),
@@ -506,7 +504,7 @@ export default function SellerDashboard() {
   // --- Order preparation / handover logic ---
   const handleUpdateOrderStatus = async (orderId, status) => {
     try {
-      const res = await fetch(`${backendUrl}/api/shop/orders/${orderId}/status`, {
+      const res = await fetch(`${backendUrl}/api/orders/seller/${orderId}/status`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -940,7 +938,7 @@ export default function SellerDashboard() {
               {/* ORDERS TAB */}
               {activeTab === 'orders' && (
                 <div className="space-y-6">
-                  <h2 className="text-xl font-black text-gray-800 uppercase">{language === 'vi' ? 'Quản lý đơn hàng mua' : 'Incoming Order Management'}</h2>
+                  <h2 className="text-xl font-black text-gray-800 uppercase">{language === 'vi' ? 'Quản lý đơn hàng bán' : 'Incoming Order Management'}</h2>
 
                   {ordLoading ? (
                     <div className="flex justify-center py-10">

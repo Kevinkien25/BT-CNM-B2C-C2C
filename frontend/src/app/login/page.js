@@ -40,7 +40,7 @@ export default function Login() {
       <main className="flex-grow flex items-center justify-center py-16 px-4 bg-gray-50">
         <div className="bg-white border border-gray-100 p-8 rounded-3xl shadow-xl w-full max-w-md space-y-6">
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-black text-gray-900 tracking-tight">ĐĂNG NHẬP HỆ THỐNG</h1>
+            <h1 className="text-2xl font-black text-gray-900 tracking-tight">ĐĂNG NHẬP</h1>
             <p className="text-xs text-gray-500 font-medium">Chào mừng bạn quay trở lại với RedMall</p>
           </div>
 

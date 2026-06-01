@@ -14,6 +14,9 @@
     "chatbot": "node chatbot-service/server.js"
   },
   "dependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "bcryptjs": "^2.4.3",
+    "mysql2": "^3.9.2",
+    "dotenv": "^16.4.5"
   }
 }

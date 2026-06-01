@@ -91,12 +91,12 @@ async function initDB() {
         FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
         FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
       )`,
-      // 6. Transactions (Escrow)
+      // 6. Transactions (Holding)
       `CREATE TABLE IF NOT EXISTS transactions (
         id INT AUTO_INCREMENT PRIMARY KEY,
         order_id INT NOT NULL,
         amount DECIMAL(15,2) NOT NULL,
-        status ENUM('escrow', 'released', 'refunded') DEFAULT 'escrow',
+        status ENUM('escrow', 'holding', 'released', 'refunded') DEFAULT 'holding',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
       )`
@@ -126,6 +126,22 @@ async function initDB() {
     } catch (e) {
       // Ignore error if column already exists
     }
+    try {
+      await pool.query("ALTER TABLE orders ADD COLUMN shipping_partner VARCHAR(50) DEFAULT 'GHN'");
+      console.log("Self-healing: Added missing 'shipping_partner' column to orders table.");
+    } catch (e) {}
+    try {
+      await pool.query("ALTER TABLE orders ADD COLUMN shipping_fee DECIMAL(10,2) DEFAULT 0.00");
+      console.log("Self-healing: Added missing 'shipping_fee' column to orders table.");
+    } catch (e) {}
+    try {
+      await pool.query("ALTER TABLE orders ADD COLUMN voucher_code VARCHAR(50) DEFAULT NULL");
+      console.log("Self-healing: Added missing 'voucher_code' column to orders table.");
+    } catch (e) {}
+    try {
+      await pool.query("ALTER TABLE transactions MODIFY COLUMN status ENUM('escrow', 'holding', 'released', 'refunded') DEFAULT 'holding'");
+      console.log("Self-healing: Updated transactions status ENUM to include 'holding' in db.js.");
+    } catch (e) {}
   } catch (error) {
     console.error("Database initialization failed. Please make sure XAMPP/MySQL is running.");
     console.error(error);

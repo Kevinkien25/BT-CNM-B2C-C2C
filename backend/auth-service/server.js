@@ -122,8 +122,13 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
 // 5. Ví điện tử (Wallet): Số dư và Lịch sử giao dịch (Buyer A11 / Seller B4)
 app.get('/api/auth/wallet', authenticateToken, async (req, res) => {
   try {
-    const [wallets] = await db.query('SELECT * FROM wallets WHERE user_id = ?', [req.user.id]);
-    if (wallets.length === 0) return res.status(404).json({ message: 'Không tìm thấy ví.' });
+    let [wallets] = await db.query('SELECT * FROM wallets WHERE user_id = ?', [req.user.id]);
+    if (wallets.length === 0) {
+      // Auto-create wallet with a default test balance (50,000,000 VND)
+      await db.query('INSERT INTO wallets (user_id, balance) VALUES (?, ?)', [req.user.id, 50000000.00]);
+      const [newWallets] = await db.query('SELECT * FROM wallets WHERE user_id = ?', [req.user.id]);
+      wallets = newWallets;
+    }
 
     const wallet = wallets[0];
     const [transactions] = await db.query(
@@ -133,6 +138,7 @@ app.get('/api/auth/wallet', authenticateToken, async (req, res) => {
 
     res.json({ wallet, transactions });
   } catch (error) {
+    console.error("Lỗi ví:", error);
     res.status(500).json({ message: 'Lỗi ví.' });
   }
 });
@@ -208,7 +214,12 @@ app.post('/api/auth/wallet/pay-internal', async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
-    const [wallets] = await conn.query('SELECT id, balance FROM wallets WHERE user_id = ? FOR UPDATE', [user_id]);
+    let [wallets] = await conn.query('SELECT id, balance FROM wallets WHERE user_id = ? FOR UPDATE', [user_id]);
+    if (wallets.length === 0) {
+      await conn.query('INSERT INTO wallets (user_id, balance) VALUES (?, ?)', [user_id, 50000000.00]); // Auto-create with test balance to let them pay
+      const [newWallets] = await conn.query('SELECT id, balance FROM wallets WHERE user_id = ? FOR UPDATE', [user_id]);
+      wallets = newWallets;
+    }
     const wallet = wallets[0];
 
     if (Number(wallet.balance) < Number(amount)) {
@@ -239,7 +250,12 @@ app.post('/api/auth/wallet/refund-internal', async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
-    const [wallets] = await conn.query('SELECT id, balance FROM wallets WHERE user_id = ? FOR UPDATE', [user_id]);
+    let [wallets] = await conn.query('SELECT id, balance FROM wallets WHERE user_id = ? FOR UPDATE', [user_id]);
+    if (wallets.length === 0) {
+      await conn.query('INSERT INTO wallets (user_id, balance) VALUES (?, ?)', [user_id, 0.00]);
+      const [newWallets] = await conn.query('SELECT id, balance FROM wallets WHERE user_id = ? FOR UPDATE', [user_id]);
+      wallets = newWallets;
+    }
     const wallet = wallets[0];
 
     const newBalance = Number(wallet.balance) + Number(amount);

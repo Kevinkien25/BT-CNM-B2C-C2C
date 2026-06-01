@@ -349,6 +349,47 @@ app.put('/api/shop/admin/:id/approve', authenticateToken, requireRole(['admin'])
   }
 });
 
+// Admin stats and shop list for Admin Dashboard
+app.get('/api/admin/stats', authenticateToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const [userCount] = await db.query('SELECT COUNT(*) AS total FROM users');
+    const [shopCount] = await db.query('SELECT COUNT(*) AS total FROM shops');
+    const [productCount] = await db.query('SELECT COUNT(*) AS total FROM products');
+    const [escrowTotal] = await db.query('SELECT SUM(amount) AS total FROM transactions WHERE status = "escrow"');
+    const [releasedTotal] = await db.query('SELECT SUM(amount) AS total FROM transactions WHERE status = "released"');
+    const [refundedTotal] = await db.query('SELECT SUM(amount) AS total FROM transactions WHERE status = "refunded"');
+
+    res.json({
+      stats: {
+        users: userCount[0].total,
+        shops: shopCount[0].total,
+        products: productCount[0].total,
+        escrow_funds: escrowTotal[0].total || 0,
+        released_funds: releasedTotal[0].total || 0,
+        refunded_funds: refundedTotal[0].total || 0
+      }
+    });
+  } catch (error) {
+    console.error("Lỗi lấy thống kê hệ thống:", error);
+    res.status(500).json({ message: 'Lỗi hệ thống khi tải thống kê.' });
+  }
+});
+
+app.get('/api/admin/shops', authenticateToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const [shops] = await db.query(
+      `SELECT s.*, u.name AS owner_name, u.email AS owner_email 
+       FROM shops s
+       JOIN users u ON s.user_id = u.id
+       ORDER BY s.created_at DESC`
+    );
+    res.json({ shops });
+  } catch (error) {
+    console.error("Lỗi lấy danh sách shop admin:", error);
+    res.status(500).json({ message: 'Lỗi hệ thống.' });
+  }
+});
+
 async function start() {
   await db.initDB();
   app.listen(PORT, () => {

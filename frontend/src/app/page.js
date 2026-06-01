@@ -26,8 +26,8 @@ function HomeContent() {
     {
       title: language === 'vi' ? "HỘI CHỢ MUA BÁN C2C - ĐỒ CŨ GIÁ TỐT" : "C2C MARKET - GREAT SECOND-HAND DEALS",
       description: language === 'vi' 
-        ? "Thanh lý đồ cũ nhanh chóng, mua sắm thả ga với cơ chế giữ tiền Escrow an toàn tuyệt đối."
-        : "Liquidate used goods quickly, shop with peace of mind using our secure Escrow payment protection.",
+        ? "Thanh lý đồ cũ nhanh chóng, mua sắm thả ga với cơ chế giữ tiền an toàn tuyệt đối."
+        : "Liquidate used goods quickly, shop with peace of mind using our secure payment protection.",
       bg: "bg-gradient-to-r from-red-600 to-red-800",
       image: "https://images.unsplash.com/photo-1472851294608-062f824d29cc?w=600&auto=format&fit=crop&q=80"
     },
@@ -160,10 +160,10 @@ function HomeContent() {
   const [activeFaq, setActiveFaq] = useState(null);
   const faqs = [
     {
-      q: language === 'vi' ? "Cơ chế bảo vệ dòng tiền Escrow hoạt động như thế nào?" : "How does the Escrow payment protection work?",
+      q: language === 'vi' ? "Cơ chế bảo vệ dòng tiền hoạt động như thế nào?" : "How does the payment protection work?",
       a: language === 'vi'
-        ? "Khi bạn đặt hàng bằng ví hoặc escrow, số tiền thanh toán sẽ được hệ thống giữ làm trung gian chứ chưa chuyển ngay cho người bán. Chỉ khi bạn nhận được hàng và bấm nút 'Xác nhận đã nhận hàng', sàn mới giải ngân tiền cho người bán. Nếu có khiếu nại, tiền sẽ được giữ lại để xử lý."
-        : "When you place an order with e-wallet or escrow, the system holds your funds as an intermediary. Only when you receive your order and click 'Confirm Receipt' will the funds be released to the seller. If you open a dispute, the funds are safely locked until admin review."
+        ? "Khi bạn đặt hàng bằng ví điện tử, số tiền thanh toán sẽ được hệ thống giữ làm trung gian chứ chưa chuyển ngay cho người bán. Chỉ khi bạn nhận được hàng và bấm nút 'Xác nhận đã nhận hàng', sàn mới giải ngân tiền cho người bán. Nếu có khiếu nại, tiền sẽ được giữ lại để xử lý."
+        : "When you place an order with e-wallet, the system holds your funds as an intermediary. Only when you receive your order and click 'Confirm Receipt' will the funds be released to the seller. If you open a dispute, the funds are safely locked until admin review."
     },
     {
       q: language === 'vi' ? "Làm thế nào để đăng ký mở gian hàng B2C doanh nghiệp?" : "How do I register a B2C business storefront?",
@@ -488,8 +488,8 @@ function HomeContent() {
                 name: "Phạm Văn Minh", 
                 role: language === 'vi' ? "Người Mua Điện Thoại Cũ" : "Secondhand Phone Buyer", 
                 review: language === 'vi'
-                  ? "Tôi đã mua chiếc iPhone 11 cũ thanh lý ở đây. Lúc đầu rất lo vì mua hàng cá nhân C2C, nhưng nhờ sàn có cơ chế giữ tiền Escrow nên tôi rất an tâm. Nhận hàng đúng mô tả mới bấm xác nhận."
-                  : "I bought a used iPhone 11 here. At first, I was worried about C2C purchases, but thanks to the platform's Escrow system holding the funds, I felt safe. I only released payment after verifying it.",
+                  ? "Tôi đã mua chiếc iPhone 11 cũ thanh lý ở đây. Lúc đầu rất lo vì mua hàng cá nhân C2C, nhưng nhờ sàn có cơ chế giữ tiền an toàn nên tôi rất an tâm. Nhận hàng đúng mô tả mới bấm xác nhận."
+                  : "I bought a used iPhone 11 here. At first, I was worried about C2C purchases, but thanks to the platform's secure holding system, I felt safe. I only released payment after verifying it.",
                 rating: 5 
               },
               { 

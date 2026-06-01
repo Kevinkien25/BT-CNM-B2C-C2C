@@ -9,7 +9,7 @@ import { useApp } from '@/context/AppContext';
 import { useLanguage } from '@/context/LanguageContext';
 
 export default function AdminDashboard() {
-  const { user, token, backendUrl } = useApp();
+  const { user, token, backendUrl, loading: authLoading } = useApp();
   const { t, language } = useLanguage();
   const router = useRouter();
 
@@ -27,6 +27,7 @@ export default function AdminDashboard() {
   const [resNotes, setResNotes] = useState({});
 
   useEffect(() => {
+    if (authLoading) return;
     if (!token) {
       router.push('/login');
       return;
@@ -40,7 +41,7 @@ export default function AdminDashboard() {
     if (user?.role === 'admin') {
       fetchAdminData();
     }
-  }, [token, user, activeTab]);
+  }, [token, user, activeTab, authLoading]);
 
   const fetchAdminData = async () => {
     setLoading(true);
@@ -176,7 +177,7 @@ export default function AdminDashboard() {
     }
   };
 
-  if (loading && shops.length === 0) {
+  if (authLoading || (loading && shops.length === 0)) {
     return (
       <>
         <Header />
@@ -230,7 +231,7 @@ export default function AdminDashboard() {
               <p className="text-xl font-black text-gray-800 mt-1">{stats.products || 4}</p>
             </div>
             <div className="bg-white border border-gray-150 p-5 rounded-2xl shadow-sm text-center bg-red-50/30 border-red-100">
-              <p className="text-[10px] font-bold text-red-600 uppercase">{language === 'vi' ? 'Ví Escrow đang giữ' : 'Escrow Holdings'}</p>
+              <p className="text-[10px] font-bold text-red-600 uppercase">{language === 'vi' ? 'Tiền đang tạm giữ' : 'Protected Holdings'}</p>
               <p className="text-base font-black text-red-600 mt-1">{Number(stats.escrow_funds).toLocaleString()} đ</p>
             </div>
             <div className="bg-white border border-gray-150 p-5 rounded-2xl shadow-sm text-center bg-green-50/30 border-green-100">

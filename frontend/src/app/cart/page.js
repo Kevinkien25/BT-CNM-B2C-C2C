@@ -108,7 +108,7 @@ export default function Cart() {
               </Link>
 
               <div className="p-3.5 bg-red-50/50 rounded-2xl border border-red-100/50 text-[10px] text-gray-500 leading-relaxed">
-                🛡️ Mua sắm của bạn được bảo vệ qua hệ thống Escrow. Người bán sẽ chỉ nhận được tiền khi bạn xác nhận nhận hàng thành công.
+                🛡️ Mua sắm của bạn được bảo vệ qua hệ thống thanh toán an toàn. Người bán sẽ chỉ nhận được tiền khi bạn xác nhận nhận hàng thành công.
               </div>
             </div>
           </div>

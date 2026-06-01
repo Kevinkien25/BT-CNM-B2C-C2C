@@ -99,8 +99,8 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
       );
     }
 
-    // 3. Tạo bản ghi giao dịch Escrow (Sàn giữ tiền)
-    const transactionStatus = (payment_method === 'Wallet' || payment_method === 'Escrow') ? 'escrow' : 'released';
+    // 3. Tạo bản ghi giao dịch bảo đảm (Sàn giữ tiền)
+    const transactionStatus = (payment_method === 'Wallet') ? 'holding' : 'released';
     await connection.query(
       'INSERT INTO transactions (order_id, amount, status) VALUES (?, ?, ?)',
       [orderId, finalAmount, transactionStatus]
@@ -161,8 +161,8 @@ app.put('/api/orders/:id/confirm-receipt', authenticateToken, async (req, res) =
     // Cập nhật trạng thái đơn hàng
     await connection.query('UPDATE orders SET status = "delivered" WHERE id = ?', [orderId]);
 
-    // Giải ngân tiền trong giao dịch Escrow
-    const [txs] = await connection.query('SELECT * FROM transactions WHERE order_id = ? AND status = "escrow"', [orderId]);
+    // Giải ngân tiền trong giao dịch bảo đảm
+    const [txs] = await connection.query('SELECT * FROM transactions WHERE order_id = ? AND status IN ("escrow", "holding")', [orderId]);
     if (txs.length > 0) {
       await connection.query('UPDATE transactions SET status = "released" WHERE order_id = ?', [orderId]);
 
@@ -183,7 +183,7 @@ app.put('/api/orders/:id/confirm-receipt', authenticateToken, async (req, res) =
           user_id: sellerUserId,
           amount: order.total_amount,
           type: 'receive',
-          description: `Nhận tiền thanh toán đơn hàng #${orderId} (Escrow giải ngân)`
+          description: `Nhận tiền thanh toán đơn hàng #${orderId} (Ví giải ngân)`
         });
       }
     }
@@ -297,6 +297,135 @@ app.put('/api/orders/admin/disputes/:id/resolve', authenticateToken, requireRole
   } catch (err) {
     await connection.rollback();
     res.status(500).json({ message: err.message });
+  } finally {
+    connection.release();
+  }
+});
+
+// Seller incoming orders
+app.get('/api/orders/seller', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  try {
+    const [shops] = await db.query('SELECT id, shop_name FROM shops WHERE user_id = ?', [req.user.id]);
+    if (shops.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy thông tin cửa hàng của bạn.' });
+    }
+    const shopId = shops[0].id;
+    const shopName = shops[0].shop_name;
+
+    const [orders] = await db.query(
+      `SELECT o.id AS order_id, o.total_amount, o.status, o.shipping_address, o.payment_method, o.created_at,
+              o.shipping_partner, o.shipping_fee, o.voucher_code,
+              u.name AS buyer_name, u.email AS buyer_email,
+              oi.product_id, oi.price, oi.quantity, p.name AS product_name, p.image_url
+       FROM orders o
+       JOIN order_items oi ON o.id = oi.order_id
+       JOIN products p ON oi.product_id = p.id
+       JOIN users u ON o.buyer_id = u.id
+       WHERE p.shop_id = ?
+       ORDER BY o.created_at DESC`,
+      [shopId]
+    );
+
+    const groupedOrders = {};
+    orders.forEach(item => {
+      if (!groupedOrders[item.order_id]) {
+        groupedOrders[item.order_id] = {
+          id: item.order_id, // Map order_id to id so ord.id works on frontend
+          order_id: item.order_id,
+          buyer_name: item.buyer_name,
+          buyer_email: item.buyer_email,
+          total_amount: item.total_amount,
+          status: item.status,
+          shipping_address: item.shipping_address,
+          payment_method: item.payment_method,
+          shipping_partner: item.shipping_partner || 'GHN',
+          shipping_fee: item.shipping_fee || 0,
+          voucher_code: item.voucher_code,
+          created_at: item.created_at,
+          items: []
+        };
+      }
+      groupedOrders[item.order_id].items.push({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        price: item.price,
+        quantity: item.quantity,
+        image_url: item.image_url,
+        shop_name: shopName
+      });
+    });
+
+    res.json({ orders: Object.values(groupedOrders) });
+  } catch (error) {
+    console.error("Lỗi lấy đơn hàng của shop:", error);
+    res.status(500).json({ message: 'Lỗi hệ thống khi lấy danh sách đơn hàng.' });
+  }
+});
+
+// Update order status by seller
+app.put('/api/orders/seller/:orderId/status', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { orderId } = req.params;
+  const { status } = req.body; // 'processing', 'shipped', 'delivered', 'cancelled'
+
+  const allowedStatuses = ['processing', 'shipped', 'delivered', 'cancelled'];
+  if (!allowedStatuses.includes(status)) {
+    return res.status(400).json({ message: 'Trạng thái đơn hàng không hợp lệ.' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [shops] = await connection.query('SELECT id FROM shops WHERE user_id = ?', [req.user.id]);
+    if (shops.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy shop.' });
+    }
+    const shopId = shops[0].id;
+
+    const [items] = await connection.query(
+      `SELECT oi.id FROM order_items oi
+       JOIN products p ON oi.product_id = p.id
+       WHERE oi.order_id = ? AND p.shop_id = ?`,
+      [orderId, shopId]
+    );
+
+    if (items.length === 0) {
+      return res.status(403).json({ message: 'Bạn không có quyền cập nhật trạng thái đơn hàng này.' });
+    }
+
+    const [orders] = await connection.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+    const order = orders[0];
+
+    await connection.query('UPDATE orders SET status = ? WHERE id = ?', [status, orderId]);
+
+    if (status === 'cancelled') {
+      await connection.query('UPDATE transactions SET status = "refunded" WHERE order_id = ?', [orderId]);
+      
+      const [orderItems] = await connection.query('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [orderId]);
+      for (const item of orderItems) {
+        await connection.query('UPDATE products SET stock = stock + ? WHERE id = ?', [item.quantity, item.product_id]);
+      }
+
+      if (order.payment_method === 'Wallet') {
+        try {
+          await axios.post('http://localhost:5001/api/auth/wallet/refund-internal', {
+            user_id: order.buyer_id,
+            amount: order.total_amount,
+            type: 'refund',
+            description: `Hoàn tiền do người bán hủy đơn hàng #${orderId}`
+          });
+        } catch (err) {
+          console.error("Lỗi tự động hoàn tiền ví:", err.message);
+        }
+      }
+    }
+
+    await connection.commit();
+    res.json({ message: `Cập nhật trạng thái đơn hàng sang "${status}" thành công.` });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Lỗi cập nhật trạng thái đơn hàng:", error);
+    res.status(500).json({ message: 'Lỗi hệ thống.' });
   } finally {
     connection.release();
   }

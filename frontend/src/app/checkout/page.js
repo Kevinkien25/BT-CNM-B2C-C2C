@@ -7,19 +7,42 @@ import Footer from '@/components/Footer';
 import { useApp } from '@/context/AppContext';
 
 export default function Checkout() {
-  const { user, token, cart, clearCart, backendUrl } = useApp();
+  const { user, token, cart, clearCart, backendUrl, loading: authLoading } = useApp();
   const router = useRouter();
 
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [receiverName, setReceiverName] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('COD');
+  const [walletBalance, setWalletBalance] = useState(0);
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Fetch Wallet Balance
+  useEffect(() => {
+    if (token) {
+      fetchWalletBalance();
+    }
+  }, [token]);
+
+  const fetchWalletBalance = async () => {
+    try {
+      const res = await fetch(`${backendUrl}/api/auth/wallet`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWalletBalance(data.wallet?.balance || 0);
+      }
+    } catch (err) {
+      setWalletBalance(12500000); // Mock default
+    }
+  };
+
   // Redirect if not logged in or cart is empty
   useEffect(() => {
+    if (authLoading) return;
     if (!token) {
       alert("Vui lòng đăng nhập để tiến hành thanh toán.");
       router.push('/login');
@@ -28,7 +51,7 @@ export default function Checkout() {
     } else if (user) {
       setReceiverName(user.name);
     }
-  }, [token, cart, user]);
+  }, [token, cart, user, authLoading]);
 
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
@@ -36,6 +59,11 @@ export default function Checkout() {
     e.preventDefault();
     if (!address || !phone || !receiverName) {
       setError("Vui lòng nhập đầy đủ thông tin giao hàng.");
+      return;
+    }
+
+    if (paymentMethod === 'Wallet' && Number(walletBalance) < totalAmount) {
+      setError("Số dư ví điện tử không đủ để thanh toán. Vui lòng nạp tiền vào ví.");
       return;
     }
 
@@ -68,7 +96,7 @@ export default function Checkout() {
         throw new Error(data.message || 'Lỗi đặt hàng.');
       }
 
-      alert("Đặt hàng thành công! Đơn hàng đang được bảo vệ qua cơ chế Escrow của RedMall.");
+      alert("Đặt hàng thành công! Đơn hàng đang được bảo vệ qua hệ thống thanh toán an toàn của RedMall.");
       clearCart();
       router.push('/orders');
     } catch (err) {
@@ -82,6 +110,14 @@ export default function Checkout() {
       setLoading(false);
     }
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center space-y-4 bg-gray-50">
+        <div className="w-12 h-12 border-4 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -142,22 +178,25 @@ export default function Checkout() {
                 <h3 className="text-sm font-bold text-gray-700 uppercase">Hình thức thanh toán</h3>
                 
                 <div className="space-y-2">
-                  {/* Escrow method */}
+                  {/* Wallet method */}
                   <label className={`flex gap-3 items-start p-4 border rounded-2xl cursor-pointer transition-all ${
-                    paymentMethod === 'Escrow' ? 'border-red-500 bg-red-50/20' : 'border-gray-200 hover:bg-gray-50'
+                    paymentMethod === 'Wallet' ? 'border-red-500 bg-red-50/20' : 'border-gray-200 hover:bg-gray-50'
                   }`}>
                     <input
                       type="radio"
                       name="payment_method"
-                      value="Escrow"
-                      checked={paymentMethod === 'Escrow'}
-                      onChange={() => setPaymentMethod('Escrow')}
+                      value="Wallet"
+                      checked={paymentMethod === 'Wallet'}
+                      onChange={() => setPaymentMethod('Wallet')}
                       className="mt-1 accent-red-600"
                     />
                     <div className="text-xs">
-                      <p className="font-bold text-gray-800 text-sm">Thanh toán giữ tiền trung gian (Escrow - Khuyên dùng)</p>
+                      <p className="font-bold text-gray-800 text-sm">Thanh toán bằng ví điện tử nội bộ</p>
                       <p className="text-gray-500 mt-1 leading-relaxed">
-                        Bạn chuyển khoản vào tài khoản bảo chứng của sàn. Sàn sẽ giữ số tiền này và chỉ chuyển cho người bán khi bạn xác nhận đã nhận đúng sản phẩm.
+                        Trừ tiền trực tiếp từ số dư ví điện tử của bạn. Nhanh chóng, an toàn.
+                      </p>
+                      <p className="mt-1 font-bold text-red-600">
+                        Số dư ví của bạn: {walletBalance.toLocaleString('vi-VN')} đ
                       </p>
                     </div>
                   </label>
@@ -184,21 +223,6 @@ export default function Checkout() {
                 </div>
               </div>
 
-              {/* Escrow details info box */}
-              {paymentMethod === 'Escrow' && (
-                <div className="p-4 bg-red-50 border border-red-100 rounded-2xl space-y-2 text-xs">
-                  <p className="font-bold text-red-700">Thông tin chuyển khoản bảo chứng Escrow:</p>
-                  <div className="grid grid-cols-2 gap-2 text-gray-700 font-medium">
-                    <p>🏦 Ngân hàng: <span className="font-bold">Techcombank</span></p>
-                    <p>💳 Số tài khoản: <span className="font-bold text-red-600 select-all">1903 2026 8888</span></p>
-                    <p className="col-span-2">👤 Tên chủ TK: <span className="font-bold uppercase">REDMALL ESCROW ACCOUNT</span></p>
-                    <p className="col-span-2">💰 Số tiền: <span className="font-bold text-red-600">{totalAmount.toLocaleString('vi-VN')} đ</span></p>
-                    <p className="col-span-2">✍ Nội dung chuyển khoản: <span className="font-bold text-gray-900 select-all">REDMALL {user?.id || 'TEST'}</span></p>
-                  </div>
-                  <p className="text-[10px] text-gray-400 italic pt-1 text-center">** Hệ thống demo tự động phê duyệt giao dịch chuyển khoản sau khi bấm nút Đặt Hàng.</p>
-                </div>
-              )}
-
               <button
                 type="submit"
                 disabled={loading}
@@ -207,7 +231,7 @@ export default function Checkout() {
                 {loading ? (
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                 ) : (
-                  paymentMethod === 'Escrow' ? 'Xác Nhận Chuyển Khoản & Đặt Hàng' : 'Đặt Hàng Ngay (COD)'
+                  paymentMethod === 'Wallet' ? 'Thanh Toán Bằng Ví Điện Tử' : 'Đặt Hàng Ngay (COD)'
                 )}
               </button>
             </form>

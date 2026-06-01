@@ -32,6 +32,12 @@ app.use('/api/products', proxy('http://localhost:5002', {
   }
 }));
 
+app.use('/api/admin', proxy('http://localhost:5002', {
+  proxyReqPathResolver: (req) => {
+    return '/api/admin' + req.url;
+  }
+}));
+
 app.use('/api/orders', proxy('http://localhost:5003', {
   proxyReqPathResolver: (req) => {
     return '/api/orders' + req.url;
