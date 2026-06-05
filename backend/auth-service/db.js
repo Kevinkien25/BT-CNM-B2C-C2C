@@ -74,6 +74,9 @@ async function initDB() {
     for (const tableQuery of tables) {
       await pool.query(tableQuery);
     }
+    try {
+      await pool.query('ALTER TABLE messages ADD COLUMN is_read TINYINT(1) DEFAULT 0');
+    } catch (e) {}
     console.log("Auth Service database initialized.");
   } catch (error) {
     console.error("Auth Service database connection failed. Make sure XAMPP/MySQL is running.");

@@ -109,6 +109,17 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS livestreams (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        shop_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        status ENUM('live', 'ended') DEFAULT 'live',
+        viewer_count INT DEFAULT 0,
+        pinned_product_id INT DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+        FOREIGN KEY (pinned_product_id) REFERENCES products(id) ON DELETE SET NULL
       )`
     ];
 
@@ -161,7 +172,7 @@ async function initDB() {
 
     // Reset test shops' approval status to 0 (Pending) and roles to 'buyer' so the user can test the approval/rejection flow
     try {
-      const [shopsToReset] = await pool.query("SELECT * FROM shops WHERE shop_name IN ('test 456', 'Shop SVfe', 'Cửa Hàng Đồ Cũ Tèo') OR is_approved = 1");
+      const [shopsToReset] = await pool.query("SELECT * FROM shops WHERE shop_name IN ('test 455', 'test 456', 'Shop SVfe')");
       if (shopsToReset.length > 0) {
         const ids = shopsToReset.map(s => s.id);
         const userIds = shopsToReset.map(s => s.user_id);

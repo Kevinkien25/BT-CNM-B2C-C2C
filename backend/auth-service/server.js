@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const http = require('http');
+const WebSocket = require('ws');
 require('dotenv').config();
 
 const db = require('./db');
@@ -10,6 +12,158 @@ const { authenticateToken, requireRole } = require('./middleware/auth');
 const app = express();
 const PORT = 5001;
 const JWT_SECRET = process.env.JWT_SECRET || 'c2c_b2c_platform_secret_key_2026';
+
+// Http server wrapper for WebSockets
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ noServer: true });
+
+// Mapping of userId -> active WebSocket connection
+const clients = new Map();
+
+wss.on('connection', (ws) => {
+  let registeredUserId = null;
+
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      if (data.type === 'register' && data.userId) {
+        registeredUserId = Number(data.userId);
+        clients.set(registeredUserId, ws);
+        console.log(`[WS] User ${registeredUserId} registered for real-time messaging.`);
+      }
+
+      // Handle typing status broadcast
+      if (data.type === 'typing' && data.receiverId) {
+        const recId = Number(data.receiverId);
+        if (clients.has(recId)) {
+          const clientSocket = clients.get(recId);
+          if (clientSocket.readyState === WebSocket.OPEN) {
+            clientSocket.send(JSON.stringify({
+              type: 'typing',
+              senderId: registeredUserId,
+              isTyping: data.isTyping
+            }));
+          }
+        }
+      }
+
+      // Handle message read confirmation
+      if (data.type === 'read' && data.partnerId) {
+        const partnerId = Number(data.partnerId);
+        // Mark messages as read in database
+        db.query(
+          'UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0',
+          [partnerId, registeredUserId]
+        ).catch(err => console.error("[WS] Error updating is_read in DB:", err.message));
+
+        // Notify the partner that their sent messages have been read
+        if (clients.has(partnerId)) {
+          const partnerSocket = clients.get(partnerId);
+          if (partnerSocket.readyState === WebSocket.OPEN) {
+            partnerSocket.send(JSON.stringify({
+              type: 'read',
+              readerId: registeredUserId
+            }));
+          }
+        }
+      }
+
+      // --- WebSockets Livestream Handlers ---
+
+      // Join livestream room
+      if (data.type === 'join_stream' && data.streamId) {
+        ws.currentStreamId = Number(data.streamId);
+        ws.username = data.username || 'Khách';
+        console.log(`[WS-Live] User ${registeredUserId || 'Guest'} (${ws.username}) joined stream ${ws.currentStreamId}`);
+
+        // Broadcast to other viewers in this stream
+        wss.clients.forEach((client) => {
+          if (client !== ws && client.readyState === WebSocket.OPEN && client.currentStreamId === ws.currentStreamId) {
+            client.send(JSON.stringify({
+              type: 'stream_user_joined',
+              username: ws.username,
+              userId: registeredUserId
+            }));
+          }
+        });
+      }
+
+      // Broadcast livestream comment
+      if (data.type === 'stream_comment' && data.streamId && data.comment) {
+        const commentMsg = {
+          type: 'stream_comment',
+          streamId: Number(data.streamId),
+          username: data.username || ws.username || 'Khách',
+          comment: data.comment,
+          userId: registeredUserId,
+          createdAt: new Date().toISOString()
+        };
+
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN && client.currentStreamId === Number(data.streamId)) {
+            client.send(JSON.stringify(commentMsg));
+          }
+        });
+      }
+
+      // Broadcast livestream heart reaction
+      if (data.type === 'stream_heart' && data.streamId) {
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN && client.currentStreamId === Number(data.streamId)) {
+            client.send(JSON.stringify({
+              type: 'stream_heart',
+              userId: registeredUserId
+            }));
+          }
+        });
+      }
+
+      // Broadcast pinned product update
+      if (data.type === 'stream_pin_product' && data.streamId) {
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN && client.currentStreamId === Number(data.streamId)) {
+            client.send(JSON.stringify({
+              type: 'stream_pinned_product_updated',
+              productId: data.productId,
+              productName: data.productName,
+              productPrice: data.productPrice,
+              productImage: data.productImage
+            }));
+          }
+        });
+      }
+
+      // Broadcast livestream camera frame (base64)
+      if (data.type === 'stream_frame' && data.streamId) {
+        console.log(`[WS-Live] Broadcast frame from stream ${data.streamId}, size: ${data.frame?.length || 0}`);
+        wss.clients.forEach((client) => {
+          if (client !== ws && client.readyState === WebSocket.OPEN && client.currentStreamId === Number(data.streamId)) {
+            client.send(JSON.stringify({
+              type: 'stream_frame',
+              frame: data.frame
+            }));
+          }
+        });
+      }
+    } catch (err) {
+      console.error("[WS] Error parsing message:", err.message);
+    }
+  });
+
+  ws.on('close', () => {
+    if (registeredUserId) {
+      clients.delete(registeredUserId);
+      console.log(`[WS] User ${registeredUserId} disconnected.`);
+    }
+  });
+});
+
+// Handle WebSocket upgrade
+server.on('upgrade', (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
+});
 
 app.use(cors());
 app.use(express.json());
@@ -355,10 +509,26 @@ app.post('/api/auth/chat/send', authenticateToken, async (req, res) => {
   }
 
   try {
+    const msgTrimmed = message.trim();
     await db.query(
       'INSERT INTO messages (sender_id, receiver_id, message) VALUES (?, ?, ?)',
-      [req.user.id, Number(receiverId), message.trim()]
+      [req.user.id, Number(receiverId), msgTrimmed]
     );
+
+    // Broadcast message via WebSockets to receiver if online
+    const recId = Number(receiverId);
+    if (clients.has(recId)) {
+      const clientSocket = clients.get(recId);
+      if (clientSocket.readyState === WebSocket.OPEN) {
+        clientSocket.send(JSON.stringify({
+          type: 'new_message',
+          senderId: req.user.id,
+          message: msgTrimmed,
+          createdAt: new Date().toISOString()
+        }));
+      }
+    }
+
     res.json({ success: true, message: 'Đã gửi tin nhắn thành công.' });
   } catch (err) {
     console.error("Lỗi gửi tin nhắn:", err);
@@ -370,6 +540,25 @@ app.post('/api/auth/chat/send', authenticateToken, async (req, res) => {
 app.get('/api/auth/chat/history/:partnerId', authenticateToken, async (req, res) => {
   const { partnerId } = req.params;
   try {
+    // 1. Mark all unread messages from partner to user as read in DB
+    await db.query(
+      'UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0',
+      [Number(partnerId), req.user.id]
+    );
+
+    // 2. Notify partner if they are currently online
+    const pId = Number(partnerId);
+    if (clients.has(pId)) {
+      const partnerSocket = clients.get(pId);
+      if (partnerSocket.readyState === WebSocket.OPEN) {
+        partnerSocket.send(JSON.stringify({
+          type: 'read',
+          readerId: req.user.id
+        }));
+      }
+    }
+
+    // 3. Fetch full chat history
     const [messages] = await db.query(
       `SELECT * FROM messages
        WHERE (sender_id = ? AND receiver_id = ?)
@@ -413,8 +602,8 @@ app.get('/api/auth/chat/partners', authenticateToken, async (req, res) => {
 
 async function start() {
   await db.initDB();
-  app.listen(PORT, () => {
-    console.log(`Auth Service matches port ${PORT}`);
+  server.listen(PORT, () => {
+    console.log(`Auth Service matches port ${PORT} (WebSockets active)`);
   });
 }
 start();

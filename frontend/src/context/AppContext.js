@@ -14,10 +14,10 @@ export function AppProvider({ children }) {
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Sync auth and cart state from localStorage on startup
+  // Sync auth and cart state from sessionStorage/localStorage on startup
   useEffect(() => {
-    const storedToken = localStorage.getItem('token');
-    const storedUser = localStorage.getItem('user');
+    const storedToken = sessionStorage.getItem('token');
+    const storedUser = sessionStorage.getItem('user');
     const storedCart = localStorage.getItem('cart');
 
     if (storedToken && storedUser) {
@@ -39,7 +39,7 @@ export function AppProvider({ children }) {
 
   // Refresh user data (useful after registering shop or admin approval)
   const refreshUser = async (customToken = token) => {
-    const activeToken = customToken || localStorage.getItem('token');
+    const activeToken = customToken || sessionStorage.getItem('token');
     if (!activeToken) return null;
 
     try {
@@ -51,7 +51,7 @@ export function AppProvider({ children }) {
       const data = await res.json();
       if (res.ok && data.user) {
         setUser(data.user);
-        localStorage.setItem('user', JSON.stringify(data.user));
+        sessionStorage.setItem('user', JSON.stringify(data.user));
         return data.user;
       }
     } catch (err) {
@@ -76,8 +76,8 @@ export function AppProvider({ children }) {
 
       setToken(data.token);
       setUser(data.user);
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      sessionStorage.setItem('token', data.token);
+      sessionStorage.setItem('user', JSON.stringify(data.user));
       return data;
     } catch (err) {
       throw err;
@@ -108,8 +108,8 @@ export function AppProvider({ children }) {
     setToken(null);
     setUser(null);
     setCart([]);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('user');
     localStorage.removeItem('cart');
   };
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
@@ -28,6 +28,10 @@ export default function BuyerDashboard() {
   const [chatInput, setChatInput] = useState('');
   const [partnersLoading, setPartnersLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [partnerTyping, setPartnerTyping] = useState(false);
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
+  const typingTimeoutRef = useRef(null);
+  const messagesEndRef = useRef(null);
 
   // Profile states
   const [profileName, setProfileName] = useState(user?.name || '');
@@ -102,6 +106,36 @@ export default function BuyerDashboard() {
     }
   };
 
+  // Handle input text changes with typing status broadcast
+  const handleChatInputChange = (e) => {
+    const val = e.target.value;
+    setChatInput(val);
+
+    if (wsRef.current && wsRef.current.readyState === 1 && activePartner) {
+      wsRef.current.send(JSON.stringify({
+        type: 'typing',
+        receiverId: activePartner.partner_id,
+        isTyping: val.length > 0
+      }));
+
+      // Cancel previous inactive typing timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Set timeout to notify "stopped typing" if inactive for 1.5s
+      typingTimeoutRef.current = setTimeout(() => {
+        if (wsRef.current && wsRef.current.readyState === 1 && activePartner) {
+          wsRef.current.send(JSON.stringify({
+            type: 'typing',
+            receiverId: activePartner.partner_id,
+            isTyping: false
+          }));
+        }
+      }, 1500);
+    }
+  };
+
   // Send message
   const handleSendMessage = async (e) => {
     e.preventDefault();
@@ -111,12 +145,25 @@ export default function BuyerDashboard() {
     const msgText = chatInput.trim();
     setChatInput('');
 
-    // Optimistically add to messages list
+    // Clear typing timeout and broadcast isTyping: false immediately
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({
+        type: 'typing',
+        receiverId: partnerId,
+        isTyping: false
+      }));
+    }
+
+    // Optimistically add to messages list with is_read = 0 (unread status)
     const tempMsg = {
       id: Date.now(),
       sender_id: user.id,
       receiver_id: partnerId,
       message: msgText,
+      is_read: 0,
       created_at: new Date().toISOString()
     };
     setChatMessages(prev => [...prev, tempMsg]);
@@ -167,6 +214,120 @@ export default function BuyerDashboard() {
       setProfileLoading(false);
     }
   };
+
+  // WebSockets Chat Sync Logic
+  const wsRef = useRef(null);
+  const activePartnerRef = useRef(null);
+
+  useEffect(() => {
+    activePartnerRef.current = activePartner?.partner_id;
+    setPartnerTyping(false);
+  }, [activePartner]);
+
+  // Scroll to bottom when message list or typing state updates
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, partnerTyping]);
+
+  // Send message read receipt to partner when selecting partner or receiving new messages
+  useEffect(() => {
+    if (activeTab === 'chat' && activePartner && wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({
+        type: 'read',
+        partnerId: activePartner.partner_id
+      }));
+    }
+  }, [activePartner?.partner_id, chatMessages.length, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'chat' && user && token) {
+      const hostname = window.location.hostname;
+      const wsUrl = `ws://${hostname}:5001`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log("[WS] Connected to auth-service WebSocket.");
+        ws.send(JSON.stringify({ type: 'register', userId: user.id }));
+        
+        // Mark as read on socket connect
+        if (activePartnerRef.current) {
+          ws.send(JSON.stringify({
+            type: 'read',
+            partnerId: activePartnerRef.current
+          }));
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // 1. Handle incoming real-time chat message
+          if (data.type === 'new_message') {
+            if (activePartnerRef.current && Number(data.senderId) === Number(activePartnerRef.current)) {
+              const incomingMsg = {
+                id: Date.now() + Math.random(),
+                sender_id: Number(data.senderId),
+                receiver_id: user.id,
+                message: data.message,
+                is_read: 1, // Immediately read since the chat is actively open
+                created_at: data.createdAt || new Date().toISOString()
+              };
+              setChatMessages(prev => {
+                if (prev.some(m => m.message === data.message && Math.abs(new Date(m.created_at) - new Date(incomingMsg.created_at)) < 1500)) {
+                  return prev;
+                }
+                return [...prev, incomingMsg];
+              });
+
+              // Send read confirmation socket event back to sender
+              ws.send(JSON.stringify({
+                type: 'read',
+                partnerId: activePartnerRef.current
+              }));
+            }
+            fetchPartners();
+          }
+
+          // 2. Handle incoming typing status
+          if (data.type === 'typing') {
+            if (activePartnerRef.current && Number(data.senderId) === Number(activePartnerRef.current)) {
+              setPartnerTyping(data.isTyping);
+            }
+          }
+
+          // 3. Handle incoming read receipt confirmation
+          if (data.type === 'read') {
+            if (activePartnerRef.current && Number(data.readerId) === Number(activePartnerRef.current)) {
+              setChatMessages(prev =>
+                prev.map(m => m.sender_id === user.id ? { ...m, is_read: 1 } : m)
+              );
+            }
+          }
+        } catch (err) {
+          console.error("[WS] Error parsing message:", err);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log("[WS] Connection closed.");
+      };
+
+      ws.onerror = (err) => {
+        console.error("[WS] Socket error:", err);
+      };
+
+      return () => {
+        if (wsRef.current) {
+          wsRef.current.close();
+          wsRef.current = null;
+        }
+      };
+    }
+  }, [activeTab, user?.id, token]);
 
   // Sync profile form when user context changes
   useEffect(() => {
@@ -1036,7 +1197,13 @@ export default function BuyerDashboard() {
             {/* CHAT TAB */}
             {activeTab === 'chat' && (
               <div className="space-y-6">
-                <h2 className="text-xl font-black text-gray-800 tracking-tight uppercase mb-4">Hộp thư nhắn tin</h2>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-black text-gray-800 tracking-tight uppercase">Hộp thư nhắn tin</h2>
+                  <div className="text-[10px] text-gray-400 font-bold bg-green-50 text-green-700 px-2.5 py-1 rounded-full border border-green-200">
+                    🟢 Real-time WebSockets Active
+                  </div>
+                </div>
+
                 
                 <div className="bg-white border border-gray-150 rounded-2xl overflow-hidden shadow-sm flex h-[480px]">
                   {/* Left column: Partners list */}
@@ -1110,21 +1277,88 @@ export default function BuyerDashboard() {
                                     <p>{msg.message}</p>
                                     <span className={`text-[8px] mt-0.5 block text-right ${isMe ? 'text-white/60' : 'text-gray-400'}`}>
                                       {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                      {isMe && (
+                                        <span className="ml-1 font-bold">
+                                          • {msg.is_read ? 'Đã xem' : 'Đã gửi'}
+                                        </span>
+                                      )}
                                     </span>
                                   </div>
                                 </div>
                               );
                             })
                           )}
+                          
+                          {/* Typing Indicator */}
+                          {partnerTyping && (
+                            <div className="flex justify-start items-center gap-1.5 px-4 py-2 text-gray-500 text-[10px] italic">
+                              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                              <span>{activePartner.partner_name} đang nhập...</span>
+                            </div>
+                          )}
+
+                          {/* Scroll Anchor */}
+                          <div ref={messagesEndRef} />
                         </div>
+
+                        {/* Quick Template Replies */}
+                        {showQuickReplies && (
+                          <div className="px-3 py-2 bg-gray-50 border-t border-gray-150 flex flex-wrap gap-1.5 overflow-x-auto items-center">
+                            <span className="text-[9px] text-gray-500 font-bold mr-1">Trả lời nhanh:</span>
+                            {(user?.role?.includes('seller') ? [
+                              "Chào bạn, sản phẩm này bên mình vẫn còn hàng ạ!",
+                              "Shop đang chuẩn bị đóng gói và sẽ bàn giao cho đơn vị vận chuyển sớm nhất.",
+                              "Dạ, sản phẩm này được bảo hành 12 tháng chính hãng và có đầy đủ hộp phụ kiện.",
+                              "Cảm ơn bạn đã tin tưởng mua sắm và ủng hộ RedMall!"
+                            ] : [
+                              "Chào bạn, sản phẩm này tình trạng còn mới khoảng bao nhiêu % và có sẵn hàng không?",
+                              "Dạ shop ơi, sản phẩm này có đi kèm đầy đủ hộp và cáp sạc phụ kiện không ạ?",
+                              "Cho mình hỏi shop có hỗ trợ giao hàng hỏa tốc trong ngày hôm nay không?",
+                              "Địa chỉ shop ở đâu để mình tiện qua xem máy trực tiếp được không?"
+                            ]).map((tmpl, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => {
+                                  setChatInput(tmpl);
+                                  // Trigger typing socket event since input content changes
+                                  if (wsRef.current && wsRef.current.readyState === 1 && activePartner) {
+                                    wsRef.current.send(JSON.stringify({
+                                      type: 'typing',
+                                      receiverId: activePartner.partner_id,
+                                      isTyping: true
+                                    }));
+                                  }
+                                }}
+                                className="text-[9px] bg-white border border-gray-200 text-gray-600 px-2 py-0.5 rounded-full hover:bg-red-50 hover:border-red-300 hover:text-red-600 transition font-medium"
+                              >
+                                {tmpl}
+                              </button>
+                            ))}
+                          </div>
+                        )}
 
                         {/* Input box */}
                         <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-gray-150 flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowQuickReplies(!showQuickReplies)}
+                            className={`text-[11px] font-bold px-2.5 py-2 rounded-xl transition border flex-shrink-0 flex items-center gap-1 ${
+                              showQuickReplies 
+                                ? 'bg-red-50 border-red-300 text-red-600 font-black' 
+                                : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                            }`}
+                            title="Trả lời nhanh"
+                          >
+                            ⚡ <span className="hidden sm:inline">Trả lời nhanh</span>
+                          </button>
                           <input
                             type="text"
                             placeholder="Nhập nội dung tin nhắn..."
                             value={chatInput}
-                            onChange={(e) => setChatInput(e.target.value)}
+                            onChange={handleChatInputChange}
                             className="flex-grow px-3 py-2 border border-gray-200 rounded-xl text-xs outline-none focus:border-red-500 bg-gray-50/50 focus:bg-white"
                           />
                           <button

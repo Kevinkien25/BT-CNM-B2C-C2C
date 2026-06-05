@@ -78,6 +78,9 @@ export default function Header() {
               </button>
             </div>
 
+            <Link href="/livestream" className="hover:underline text-red-100 font-bold flex items-center gap-0.5">
+              📺 Live
+            </Link>
             <Link href="/seller" className="hover:underline">{t('seller_channel')}</Link>
             {user?.role === 'admin' && (
               <Link href="/admin" className="hover:underline font-semibold">{t('admin_channel')}</Link>
@@ -149,6 +152,10 @@ export default function Header() {
                   
                   <Link href="/orders" className="block px-4 py-2 text-gray-700 hover:bg-red-50 hover:text-red-600 transition-colors">
                     {t('orders')}
+                  </Link>
+
+                  <Link href="/livestream" className="block px-4 py-2 text-gray-700 hover:bg-red-50 hover:text-red-600 transition-colors">
+                    📺 Livestream
                   </Link>
 
                   <Link href="/seller" className="block px-4 py-2 text-gray-700 hover:bg-red-50 hover:text-red-600 transition-colors">
