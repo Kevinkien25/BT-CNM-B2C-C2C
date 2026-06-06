@@ -6,6 +6,7 @@ import Link from 'next/link';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import ChatbotWidget from '@/components/ChatbotWidget';
+import LivestreamModal from '@/components/LivestreamModal';
 import { useApp } from '@/context/AppContext';
 import { useLanguage } from '@/context/LanguageContext';
 
@@ -19,6 +20,27 @@ function HomeContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [recommendations, setRecommendations] = useState(null);
+
+  const [livestreams, setLivestreams] = useState([]);
+  const [selectedStream, setSelectedStream] = useState(null);
+
+  const fetchActiveStreams = async () => {
+    try {
+      const res = await fetch(`${backendUrl}/api/products/livestreams/active`);
+      if (res.ok) {
+        const data = await res.json();
+        setLivestreams(data.streams || []);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch active streams:", e.message);
+    }
+  };
+
+  useEffect(() => {
+    fetchActiveStreams();
+    const interval = setInterval(fetchActiveStreams, 15000);
+    return () => clearInterval(interval);
+  }, [backendUrl]);
   
   // Slide Banner State
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -302,6 +324,82 @@ function HomeContent() {
             </Link>
           </div>
         </div>
+      )}
+
+      {/* Livestream Section */}
+      {livestreams.length > 0 && (
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 font-sans">
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h2 className="text-xl font-black text-gray-800 uppercase tracking-tight flex items-center gap-2">
+                📺 {language === 'vi' ? 'Đang phát sóng trực tiếp' : 'Live Streams'}
+              </h2>
+              <p className="text-gray-400 text-xs mt-0.5">{language === 'vi' ? 'Mua sắm và tương tác trực tiếp với người bán' : 'Shop and chat live with sellers'}</p>
+            </div>
+            <Link 
+              href="/livestream"
+              className="text-xs font-bold text-red-650 hover:text-red-700 transition"
+            >
+              {language === 'vi' ? 'Xem tất cả ➔' : 'See all ➔'}
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            {livestreams.map(stream => (
+              <div 
+                key={stream.id}
+                onClick={() => setSelectedStream(stream)}
+                className="bg-white border border-gray-150 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition duration-200 cursor-pointer group flex flex-col justify-between"
+              >
+                {/* Visual loop backdrop container */}
+                <div className="h-44 bg-gradient-to-br from-indigo-900 to-red-950 relative flex items-center justify-center text-white">
+                  <div className="absolute top-2 left-2 bg-red-600 text-[8px] font-black uppercase px-2 py-0.5 rounded-full flex items-center gap-1.5 animate-pulse">
+                    <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping"></span>
+                    LIVE
+                  </div>
+                  <div className="absolute top-2 right-2 bg-black/50 text-[8px] font-bold px-2 py-0.5 rounded-full text-white">
+                    👀 {stream.viewer_count}
+                  </div>
+                  
+                  <span className="text-4xl filter group-hover:scale-110 transition duration-300">📺</span>
+                  <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-0.5 rounded-md text-[9px] font-bold truncate max-w-[90%]">
+                    {stream.shop_name}
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <h3 className="font-bold text-xs text-gray-800 line-clamp-2 min-h-[32px] group-hover:text-red-650 transition">
+                    {stream.title}
+                  </h3>
+
+                  {stream.pinned_product_id ? (
+                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-2 flex gap-2 items-center text-[10px]">
+                      <img 
+                        src={stream.product_image || 'https://images.unsplash.com/photo-1510557880182-3d4d3cba35a5?w=50'} 
+                        alt="Pinned"
+                        className="w-8 h-8 object-cover rounded-md flex-shrink-0"
+                      />
+                      <div className="min-w-0 flex-grow">
+                        <p className="font-bold truncate text-gray-700">{stream.product_name}</p>
+                        <p className="text-red-500 font-bold mt-0.5">{Number(stream.product_price).toLocaleString()} VND</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-gray-400 italic py-2 text-center bg-gray-50 rounded-xl">Chưa ghim sản phẩm</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Livestream Overlay Modal */}
+      {selectedStream && (
+        <LivestreamModal 
+          stream={selectedStream}
+          onClose={() => setSelectedStream(null)}
+        />
       )}
 
       {/* Categories section */}

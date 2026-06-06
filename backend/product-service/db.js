@@ -55,6 +55,17 @@ async function initDB() {
         international_shipping TINYINT(1) DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS livestreams (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        shop_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        status ENUM('live', 'ended') DEFAULT 'live',
+        viewer_count INT DEFAULT 0,
+        pinned_product_id INT DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+        FOREIGN KEY (pinned_product_id) REFERENCES products(id) ON DELETE SET NULL
       )`
     ];
 

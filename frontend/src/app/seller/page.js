@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
@@ -14,6 +14,21 @@ export default function SellerDashboard() {
 
   // Active Tab: 'products' | 'orders' | 'wallet' | 'vouchers' | 'analytics' | 'branding'
   const [activeTab, setActiveTab] = useState('products');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedTab = localStorage.getItem('sellerActiveTab');
+      if (savedTab) {
+        setActiveTab(savedTab);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('sellerActiveTab', activeTab);
+    }
+  }, [activeTab]);
 
   // Shop registration state
   const [shopName, setShopName] = useState('');
@@ -72,6 +87,114 @@ export default function SellerDashboard() {
       const [chatInput, setChatInput] = useState('');
       const [partnersLoading, setPartnersLoading] = useState(false);
       const [messagesLoading, setMessagesLoading] = useState(false);
+      const [partnerTyping, setPartnerTyping] = useState(false);
+      const [showQuickReplies, setShowQuickReplies] = useState(false);
+      
+      const wsRef = useRef(null);
+      const activePartnerRef = useRef(null);
+      const typingTimeoutRef = useRef(null);
+      const messagesEndRef = useRef(null);
+
+      // Livestream States for Seller
+      const [streamTitle, setStreamTitle] = useState('');
+      const [isLive, setIsLive] = useState(false);
+      const [activeStream, setActiveStream] = useState(null);
+      const [streamComments, setStreamComments] = useState([]);
+      const [streamHearts, setStreamHearts] = useState(0);
+      const [streamPinnedProduct, setStreamPinnedProduct] = useState(null);
+
+      const videoRef = useRef(null);
+      const mediaStreamRef = useRef(null);
+      const commentsEndRef = useRef(null);
+      const frameIntervalRef = useRef(null);
+
+      const activeStreamRef = useRef(null);
+      useEffect(() => {
+        activeStreamRef.current = activeStream;
+      }, [activeStream]);
+
+      const startCameraCapture = async (streamId) => {
+        try {
+          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            mediaStreamRef.current = stream;
+            if (videoRef.current) {
+              videoRef.current.srcObject = stream;
+              videoRef.current.play().catch(err => console.warn("Lỗi gọi play() trên video:", err));
+            }
+
+            // Periodically send frames over websocket to bypass device locking on same-machine testing
+            const canvas = document.createElement('canvas');
+            canvas.width = 240;
+            canvas.height = 180;
+            const ctx = canvas.getContext('2d');
+            
+            if (frameIntervalRef.current) {
+              clearInterval(frameIntervalRef.current);
+            }
+
+            const frameInterval = setInterval(() => {
+              if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== 1) return;
+              try {
+                const vid = videoRef.current;
+                ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+                const base64Frame = canvas.toDataURL('image/jpeg', 0.25);
+                wsRef.current.send(JSON.stringify({
+                  type: 'stream_frame',
+                  streamId: streamId,
+                  frame: base64Frame
+                }));
+              } catch (err) {
+                console.error("Lỗi gửi frame hình:", err);
+              }
+            }, 200);
+
+            frameIntervalRef.current = frameInterval;
+          }
+        } catch (mediaErr) {
+          console.warn("Không truy cập được Camera/Microphone:", mediaErr.message);
+          setStreamComments(prev => [...prev, {
+            id: 'sys-cam-err-' + Date.now(),
+            username: 'Hệ thống',
+            comment: 'Cảnh báo: Không tìm thấy camera, hệ thống sẽ sử dụng hình ảnh giả lập thay thế.',
+            isSystem: true
+          }]);
+        }
+      };
+
+      const checkActiveStream = async () => {
+        if (!token || !shop) return;
+        try {
+          const res = await fetch(`${backendUrl}/api/products/livestreams/my-active`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (!res.ok) throw new Error();
+          const data = await res.json();
+          if (data.stream) {
+            setIsLive(true);
+            setActiveStream(data.stream.id);
+            setStreamTitle(data.stream.title);
+            setStreamHearts(data.stream.viewer_count || 0);
+            if (data.stream.pinned_product_id) {
+              setStreamPinnedProduct({
+                id: data.stream.pinned_product_id,
+                name: data.stream.product_name,
+                price: data.stream.product_price,
+                image_url: data.stream.product_image
+              });
+            } else {
+              setStreamPinnedProduct(null);
+            }
+            
+            // Start camera capture
+            setTimeout(() => {
+              startCameraCapture(data.stream.id);
+            }, 500);
+          }
+        } catch (err) {
+          console.warn("Lỗi kiểm tra livestream active của tôi:", err);
+        }
+      };
 
       // Fetch Shop Profile State & Logic
       const [shop, setShop] = useState(null);
@@ -126,14 +249,171 @@ export default function SellerDashboard() {
       // Load data based on tab and shop availability (only if shop is approved)
       useEffect(() => {
         if (shop && shop.is_approved === 1) {
-          if (activeTab === 'products') fetchMyProducts();
+          if (activeTab === 'products' || activeTab === 'livestream') fetchMyProducts();
           if (activeTab === 'orders' || activeTab === 'analytics') fetchShopOrders();
           if (activeTab === 'wallet') fetchWalletData();
           if (activeTab === 'vouchers') loadVouchers();
           if (activeTab === 'branding') setShopBannerUrl(shop.banner_url || '');
           if (activeTab === 'chat') fetchPartners();
+          if (activeTab === 'livestream') checkActiveStream();
         }
       }, [shop, activeTab]);
+
+      // Auto-join livestream room on WebSockets when stream becomes active
+      useEffect(() => {
+        if (isLive && activeStream && wsRef.current && wsRef.current.readyState === 1) {
+          console.log("[WS] Registering/re-joining stream room:", activeStream);
+          wsRef.current.send(JSON.stringify({
+            type: 'join_stream',
+            streamId: activeStream,
+            username: shop?.shop_name || 'Chủ shop'
+          }));
+        }
+      }, [activeStream, isLive, shop?.shop_name]);
+
+      // WebSockets Chat Sync Logic for Seller Dashboard
+      useEffect(() => {
+        activePartnerRef.current = activePartner?.partner_id;
+        setPartnerTyping(false);
+      }, [activePartner]);
+
+      // Scroll to bottom when message list or typing state updates
+      useEffect(() => {
+        if (messagesEndRef.current) {
+          messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, [chatMessages, partnerTyping]);
+
+      // Send message read receipt to partner when selecting partner or receiving new messages
+      useEffect(() => {
+        if (activeTab === 'chat' && activePartner && wsRef.current && wsRef.current.readyState === 1) {
+          wsRef.current.send(JSON.stringify({
+            type: 'read',
+            partnerId: activePartner.partner_id
+          }));
+        }
+      }, [activePartner?.partner_id, chatMessages.length, activeTab]);
+
+      // Establish WebSocket connection when tab is 'chat' or 'livestream'
+      useEffect(() => {
+        if ((activeTab === 'chat' || activeTab === 'livestream') && user && token) {
+          const hostname = window.location.hostname;
+          const wsUrl = `ws://${hostname}:5001`;
+          const ws = new WebSocket(wsUrl);
+          wsRef.current = ws;
+
+          ws.onopen = () => {
+            console.log("[WS] Connected to auth-service WebSocket (Seller Console).");
+            ws.send(JSON.stringify({ type: 'register', userId: user.id }));
+            
+            // Mark as read on socket connect
+            if (activePartnerRef.current && activeTab === 'chat') {
+              ws.send(JSON.stringify({
+                type: 'read',
+                partnerId: activePartnerRef.current
+              }));
+            }
+
+            // Register/re-join stream room on WebSocket connect
+            if (activeStreamRef.current && activeTab === 'livestream') {
+              console.log("[WS] Re-joining livestream room:", activeStreamRef.current);
+              ws.send(JSON.stringify({
+                type: 'join_stream',
+                streamId: activeStreamRef.current,
+                username: shop?.shop_name || 'Chủ shop'
+              }));
+            }
+          };
+
+          ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              
+              // 1. Handle incoming real-time chat message
+              if (data.type === 'new_message') {
+                if (activePartnerRef.current && Number(data.senderId) === Number(activePartnerRef.current)) {
+                  const incomingMsg = {
+                    id: Date.now() + Math.random(),
+                    sender_id: Number(data.senderId),
+                    receiver_id: user.id,
+                    message: data.message,
+                    is_read: 1, // Read since the chat is open
+                    created_at: data.createdAt || new Date().toISOString()
+                  };
+                  setChatMessages(prev => {
+                    // Prevent duplicates
+                    if (prev.some(m => m.message === data.message && Math.abs(new Date(m.created_at) - new Date(incomingMsg.created_at)) < 1500)) {
+                      return prev;
+                    }
+                    return [...prev, incomingMsg];
+                  });
+
+                  // Send read receipt
+                  ws.send(JSON.stringify({
+                    type: 'read',
+                    partnerId: activePartnerRef.current
+                  }));
+                }
+                fetchPartners();
+              }
+
+              // 2. Handle incoming typing status
+              if (data.type === 'typing') {
+                if (activePartnerRef.current && Number(data.senderId) === Number(activePartnerRef.current)) {
+                  setPartnerTyping(data.isTyping);
+                }
+              }
+
+              // 3. Handle incoming read receipt confirmation
+              if (data.type === 'read') {
+                if (activePartnerRef.current && Number(data.readerId) === Number(activePartnerRef.current)) {
+                  setChatMessages(prev =>
+                    prev.map(m => m.sender_id === user.id ? { ...m, is_read: 1 } : m)
+                  );
+                }
+              }
+
+              // 4. Handle incoming livestream events
+              if (data.type === 'stream_comment') {
+                setStreamComments(prev => [...prev, data]);
+              }
+              if (data.type === 'stream_heart') {
+                setStreamHearts(prev => prev + 1);
+              }
+              if (data.type === 'stream_user_joined') {
+                setStreamComments(prev => [...prev, {
+                  id: Date.now() + Math.random(),
+                  username: 'Hệ thống',
+                  comment: `${data.username} đã tham gia livestream.`,
+                  isSystem: true
+                }]);
+              }
+              if (data.type === 'stream_pinned_product_updated') {
+                setStreamPinnedProduct(data.productId ? {
+                  id: data.productId,
+                  name: data.productName,
+                  price: data.productPrice,
+                  image_url: data.productImage
+                } : null);
+              }
+            } catch (err) {
+              console.error("[WS] Error parsing message:", err);
+            }
+          };
+
+          ws.onclose = () => {
+            console.log("[WS] Connection closed.");
+          };
+
+          ws.onerror = (err) => {
+            console.error("[WS] Socket error:", err);
+          };
+
+          return () => {
+            ws.close();
+          };
+        }
+      }, [activeTab]);
 
       const fetchMyProducts = async () => {
         if (!shop) return;
@@ -339,6 +619,35 @@ export default function SellerDashboard() {
     }
   };
 
+  const handleChatInputChange = (e) => {
+    const val = e.target.value;
+    setChatInput(val);
+
+    if (wsRef.current && wsRef.current.readyState === 1 && activePartner) {
+      wsRef.current.send(JSON.stringify({
+        type: 'typing',
+        receiverId: activePartner.partner_id,
+        isTyping: val.length > 0
+      }));
+
+      // Cancel previous inactive typing timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Set timeout to notify "stopped typing" if inactive for 1.5s
+      typingTimeoutRef.current = setTimeout(() => {
+        if (wsRef.current && wsRef.current.readyState === 1 && activePartner) {
+          wsRef.current.send(JSON.stringify({
+            type: 'typing',
+            receiverId: activePartner.partner_id,
+            isTyping: false
+          }));
+        }
+      }, 1500);
+    }
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!activePartner || !chatInput.trim()) return;
@@ -347,12 +656,25 @@ export default function SellerDashboard() {
     const msgText = chatInput.trim();
     setChatInput('');
 
+    // Clear typing timeout and broadcast isTyping: false immediately
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({
+        type: 'typing',
+        receiverId: partnerId,
+        isTyping: false
+      }));
+    }
+
     // Optimistically add to messages list
     const tempMsg = {
       id: Date.now(),
       sender_id: user.id,
       receiver_id: partnerId,
       message: msgText,
+      is_read: 0,
       created_at: new Date().toISOString()
     };
     setChatMessages(prev => [...prev, tempMsg]);
@@ -374,6 +696,154 @@ export default function SellerDashboard() {
       console.error("Failed to send message:", err.message);
     }
   };
+
+  // --- Livestream Controlling Logic ---
+  const handleStartStream = async (e) => {
+    e.preventDefault();
+    if (!streamTitle.trim()) return;
+
+    try {
+      const res = await fetch(`${backendUrl}/api/products/livestreams/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ title: streamTitle.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Lỗi bắt đầu stream.');
+
+      setIsLive(true);
+      setActiveStream(data.streamId);
+      setStreamComments([{
+        id: 'sys-start',
+        username: 'Hệ thống',
+        comment: 'Livestream đã bắt đầu! Đang kết nối camera...',
+        isSystem: true
+      }]);
+      setStreamHearts(0);
+      setStreamPinnedProduct(null);
+
+      // Start webcam capture locally
+      setTimeout(() => {
+        startCameraCapture(data.streamId);
+      }, 500);
+
+      // Register the livestream room on WebSockets
+      if (wsRef.current && wsRef.current.readyState === 1) {
+        wsRef.current.send(JSON.stringify({
+          type: 'join_stream',
+          streamId: data.streamId,
+          username: shop?.shop_name || 'Chủ shop'
+        }));
+      }
+
+    } catch (err) {
+      alert("Lỗi: " + err.message);
+    }
+  };
+
+  const handleEndStream = async () => {
+    if (!activeStream) return;
+    try {
+      await fetch(`${backendUrl}/api/products/livestreams/end/${activeStream}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+    } catch (err) {
+      console.warn("Failed to notify backend of ended stream:", err.message);
+    }
+
+    if (frameIntervalRef.current) {
+      clearInterval(frameIntervalRef.current);
+      frameIntervalRef.current = null;
+    }
+
+    // Stop media tracks
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setIsLive(false);
+    setActiveStream(null);
+    setStreamTitle('');
+  };
+
+  const handlePinProduct = async (prodId) => {
+    if (!activeStream) return;
+    try {
+      const res = await fetch(`${backendUrl}/api/products/livestreams/pin`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ streamId: activeStream, productId: prodId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Lỗi ghim sản phẩm.');
+
+      // Update local state and broadcast via WebSocket
+      const prod = myProducts.find(p => p.id === Number(prodId)) || null;
+      setStreamPinnedProduct(prod);
+
+      if (wsRef.current && wsRef.current.readyState === 1) {
+        wsRef.current.send(JSON.stringify({
+          type: 'stream_pin_product',
+          streamId: activeStream,
+          productId: prod ? prod.id : null,
+          productName: prod ? prod.name : '',
+          productPrice: prod ? prod.price : 0,
+          productImage: prod ? prod.image_url : ''
+        }));
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const sendLiveComment = (commentText) => {
+    if (!activeStream || !commentText.trim()) return;
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({
+        type: 'stream_comment',
+        streamId: activeStream,
+        username: `${shop?.shop_name || 'Người bán'} (Chủ shop)`,
+        comment: commentText.trim()
+      }));
+    }
+  };
+
+  // Scroll live comments list to bottom
+  useEffect(() => {
+    if (commentsEndRef.current) {
+      commentsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [streamComments]);
+
+  // Cleanup stream on tab change
+  useEffect(() => {
+    if (activeTab !== 'livestream' && isLive) {
+      handleEndStream();
+    }
+  }, [activeTab]);
+
+  // Unmount cleanup
+  useEffect(() => {
+    return () => {
+      if (frameIntervalRef.current) {
+        clearInterval(frameIntervalRef.current);
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
 
   // --- Register Shop Logic ---
   const handleRegisterShop = async (e) => {
@@ -936,6 +1406,7 @@ export default function SellerDashboard() {
                   { id: 'wallet', label: language === 'vi' ? 'Ví doanh thu' : 'Sales Wallet', icon: '💳' },
                   { id: 'vouchers', label: language === 'vi' ? 'Mã giảm giá shop' : 'Shop Vouchers', icon: '🎟️' },
                   { id: 'chat', label: language === 'vi' ? 'Hỗ trợ khách hàng' : 'Customer Support', icon: '💬' },
+                  { id: 'livestream', label: language === 'vi' ? 'Phát trực tiếp (Live)' : 'Go Live', icon: '📺' },
                   { id: 'analytics', label: t('sales_report'), icon: '📈' },
                   { id: 'branding', label: language === 'vi' ? 'Trang trí Shop' : 'Shop Branding', icon: '🎨' }
                 ].map(tab => (
@@ -1475,9 +1946,14 @@ export default function SellerDashboard() {
               {/* CHAT TAB */}
               {activeTab === 'chat' && (
                 <div className="space-y-6">
-                  <h2 className="text-xl font-black text-gray-800 uppercase">
-                    {language === 'vi' ? 'Hộp thư hỗ trợ khách hàng' : 'Customer Support Chat'}
-                  </h2>
+                  <div className="flex flex-wrap justify-between items-center gap-2">
+                    <h2 className="text-xl font-black text-gray-800 uppercase">
+                      {language === 'vi' ? 'Hộp thư hỗ trợ khách hàng' : 'Customer Support Chat'}
+                    </h2>
+                    <span className="text-[10px] bg-green-50 text-green-700 font-bold px-2.5 py-0.5 rounded-full border border-green-200">
+                      🟢 Real-time WebSockets Active
+                    </span>
+                  </div>
                   
                   <div className="bg-white border border-gray-150 rounded-2xl overflow-hidden shadow-sm flex h-[480px]">
                     {/* Left column: Partners list */}
@@ -1549,21 +2025,83 @@ export default function SellerDashboard() {
                                       <p>{msg.message}</p>
                                       <span className={`text-[8px] mt-0.5 block text-right ${isMe ? 'text-white/60' : 'text-gray-400'}`}>
                                         {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        {isMe && (
+                                          <span className="ml-1 font-bold">
+                                            • {msg.is_read ? 'Đã xem' : 'Đã gửi'}
+                                          </span>
+                                        )}
                                       </span>
                                     </div>
                                   </div>
                                 );
                               })
                             )}
+
+                            {/* Typing Indicator */}
+                            {partnerTyping && (
+                              <div className="flex justify-start items-center gap-1.5 px-4 py-2 text-gray-500 text-[10px] italic">
+                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                                <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                                <span>{activePartner.partner_name} đang nhập...</span>
+                              </div>
+                            )}
+
+                            {/* Scroll Anchor */}
+                            <div ref={messagesEndRef} />
                           </div>
+
+                          {/* Quick Template Replies */}
+                          {showQuickReplies && (
+                            <div className="px-3 py-2 bg-gray-50 border-t border-gray-150 flex flex-wrap gap-1.5 overflow-x-auto items-center">
+                              <span className="text-[9px] text-gray-500 font-bold mr-1">Trả lời nhanh:</span>
+                              {[
+                                "Chào bạn, sản phẩm này bên mình vẫn còn hàng ạ!",
+                                "Shop đang chuẩn bị đóng gói và sẽ bàn giao cho đơn vị vận chuyển sớm nhất.",
+                                "Dạ, sản phẩm này được bảo hành 12 tháng chính hãng và có đầy đủ hộp phụ kiện.",
+                                "Cảm ơn bạn đã tin tưởng mua sắm và ủng hộ RedMall!"
+                              ].map((tmpl, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => {
+                                    setChatInput(tmpl);
+                                    // Trigger typing socket event since input content changes
+                                    if (wsRef.current && wsRef.current.readyState === 1 && activePartner) {
+                                      wsRef.current.send(JSON.stringify({
+                                        type: 'typing',
+                                        receiverId: activePartner.partner_id,
+                                        isTyping: true
+                                      }));
+                                    }
+                                  }}
+                                  className="text-[9px] bg-white border border-gray-200 text-gray-600 px-2 py-0.5 rounded-full hover:bg-red-50 hover:border-red-300 hover:text-red-600 transition font-medium"
+                                >
+                                  {tmpl}
+                                </button>
+                              ))}
+                            </div>
+                          )}
 
                           {/* Input box */}
                           <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-gray-150 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setShowQuickReplies(!showQuickReplies)}
+                              className={`text-[11px] font-bold px-2.5 py-2 rounded-xl transition border flex-shrink-0 flex items-center gap-1 ${
+                                showQuickReplies 
+                                  ? 'bg-red-50 border-red-300 text-red-650 font-black' 
+                                  : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                              }`}
+                              title="Trả lời nhanh"
+                            >
+                              ⚡ <span className="hidden sm:inline">Trả lời nhanh</span>
+                            </button>
                             <input
                               type="text"
                               placeholder="Nhập nội dung tin nhắn..."
                               value={chatInput}
-                              onChange={(e) => setChatInput(e.target.value)}
+                              onChange={handleChatInputChange}
                               className="flex-grow px-3 py-2 border border-gray-200 rounded-xl text-xs outline-none focus:border-red-500 bg-gray-50/50 focus:bg-white"
                             />
                             <button
@@ -1582,6 +2120,183 @@ export default function SellerDashboard() {
                       )}
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* LIVESTREAM TAB */}
+              {activeTab === 'livestream' && (
+                <div className="space-y-6">
+                  <div className="flex flex-wrap justify-between items-center gap-2">
+                    <h2 className="text-xl font-black text-gray-800 uppercase">
+                      {language === 'vi' ? 'Phát sóng trực tiếp' : 'Selling Livestream'}
+                    </h2>
+                    {isLive && (
+                      <span className="flex items-center gap-1.5 text-xs bg-red-50 text-red-600 font-bold px-3 py-1 rounded-full border border-red-200 animate-pulse">
+                        <span className="w-2.5 h-2.5 bg-red-600 rounded-full animate-ping"></span>
+                        REC LIVE
+                      </span>
+                    )}
+                  </div>
+
+                  {!isLive ? (
+                    <div className="bg-white border border-gray-150 rounded-2xl p-8 text-center shadow-sm max-w-xl mx-auto space-y-5">
+                      <div className="text-5xl">📺</div>
+                      <div className="space-y-2">
+                        <h3 className="font-black text-gray-800 text-lg">Bắt đầu Livestream giới thiệu sản phẩm</h3>
+                        <p className="text-gray-500 text-xs leading-relaxed max-w-md mx-auto">
+                          Phát trực tiếp webcam của bạn để giới thiệu sản phẩm tới khách hàng. Cho phép người mua thả tim, bình luận trực tiếp và mua hàng nhanh thông qua ví điện tử.
+                        </p>
+                      </div>
+
+                      <form onSubmit={handleStartStream} className="space-y-4 text-left">
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-gray-500 uppercase">Tiêu đề Livestream *</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Ví dụ: Xả hàng Galaxy Fold5 giá rẻ hôm nay!"
+                            value={streamTitle}
+                            onChange={(e) => setStreamTitle(e.target.value)}
+                            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-xs outline-none focus:border-red-500 bg-gray-50 focus:bg-white"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          className="w-full bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-3 rounded-xl transition shadow"
+                        >
+                          Bắt đầu phát sóng trực tiếp 🚀
+                        </button>
+                      </form>
+                    </div>
+                  ) : (
+                    <div className="bg-white border border-gray-150 rounded-2xl overflow-hidden shadow-sm flex flex-col md:flex-row h-[560px]">
+                      {/* Left: Video broadcast and Pinned Product selector */}
+                      <div className="w-full md:w-3/5 border-r border-gray-150 flex flex-col bg-black text-white relative">
+                        {/* Stream Header Stats */}
+                        <div className="absolute top-3 left-3 right-3 z-10 flex justify-between items-center pointer-events-none">
+                          <div className="bg-black/60 px-3 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping"></span>
+                            <span className="truncate max-w-[200px]">{streamTitle}</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <div className="bg-black/60 px-2.5 py-1 rounded-full text-[9px] font-bold flex items-center gap-1">
+                              👀 <span>{activeStream ? '1+' : '0'} đang xem</span>
+                            </div>
+                            <div className="bg-black/60 px-2.5 py-1 rounded-full text-[9px] font-bold flex items-center gap-1">
+                              ❤️ <span>{streamHearts} thả tim</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Webcam View */}
+                        <div className="flex-grow flex items-center justify-center relative overflow-hidden bg-gray-900 min-h-[300px]">
+                          <video
+                            ref={videoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="w-full h-full object-cover"
+                          />
+                          {/* Simulated media loop overlay */}
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30 pointer-events-none" />
+                        </div>
+
+                        {/* Bottom Bar: Pinned product control */}
+                        <div className="p-4 bg-gray-900 text-white border-t border-gray-800 flex flex-col gap-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex-grow">
+                              <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Ghim sản phẩm đang bán</label>
+                              <select
+                                onChange={(e) => handlePinProduct(e.target.value)}
+                                value={streamPinnedProduct?.id || ''}
+                                className="w-full bg-gray-800 border border-gray-700 text-xs rounded-xl px-3 py-2 text-white outline-none"
+                              >
+                                <option value="">-- Chọn sản phẩm để ghim bán hàng --</option>
+                                {myProducts.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name} - {Number(p.price).toLocaleString()} VND</option>
+                                ))}
+                              </select>
+                            </div>
+                            <button
+                              onClick={handleEndStream}
+                              className="bg-red-650 hover:bg-red-700 text-xs font-bold px-4 py-3 rounded-xl transition flex-shrink-0 self-end"
+                            >
+                              Tắt Livestream 🛑
+                            </button>
+                          </div>
+
+                          {/* Pinned product preview card */}
+                          {streamPinnedProduct ? (
+                            <div className="bg-gray-800/85 border border-gray-700 rounded-xl p-3 flex gap-3 items-center">
+                              <img
+                                src={streamPinnedProduct.image_url || 'https://images.unsplash.com/photo-1510557880182-3d4d3cba35a5?w=100'}
+                                alt="Pinned"
+                                className="w-12 h-12 object-cover rounded-lg flex-shrink-0"
+                              />
+                              <div className="flex-grow min-w-0">
+                                <span className="text-[9px] bg-red-600 text-white font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">Đang Ghim</span>
+                                <h4 className="text-xs font-bold truncate mt-1">{streamPinnedProduct.name}</h4>
+                                <p className="text-[10px] text-red-400 font-bold mt-0.5">{Number(streamPinnedProduct.price).toLocaleString()} VND</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-gray-500 italic text-center py-2">Chưa ghim sản phẩm nào lên livestream.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Live Chat Box */}
+                      <div className="w-full md:w-2/5 flex flex-col justify-between bg-gray-50/30">
+                        <div className="p-3 border-b border-gray-150 bg-white">
+                          <span className="font-bold text-xs text-gray-800">Trò chuyện trực tiếp (Live Chat)</span>
+                          <p className="text-[9px] text-gray-400">Bình luận của người xem sẽ hiện ở đây</p>
+                        </div>
+
+                        {/* Comments history */}
+                        <div className="flex-grow overflow-y-auto p-4 space-y-3 flex flex-col max-h-[380px]">
+                          {streamComments.map((cmt, idx) => (
+                            <div key={cmt.id || idx} className="text-xs leading-relaxed">
+                              {cmt.isSystem ? (
+                                <p className="text-gray-400 italic text-[10px]">{cmt.comment}</p>
+                              ) : (
+                                <div className="bg-white border border-gray-100 rounded-xl px-3 py-1.5 shadow-sm">
+                                  <strong className="text-red-600 font-bold block text-[10px] mb-0.5">{cmt.username}</strong>
+                                  <span className="text-gray-700 font-medium">{cmt.comment}</span>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                          <div ref={commentsEndRef} />
+                        </div>
+
+                        {/* Send comment box */}
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const input = e.target.elements.liveCommentText;
+                            if (input.value.trim()) {
+                              sendLiveComment(input.value);
+                              input.value = '';
+                            }
+                          }}
+                          className="p-3 bg-white border-t border-gray-150 flex gap-2"
+                        >
+                          <input
+                            name="liveCommentText"
+                            type="text"
+                            placeholder="Nhập phản hồi trực tiếp..."
+                            className="flex-grow px-3 py-2 border border-gray-200 rounded-xl text-xs outline-none focus:border-red-500 bg-gray-50/50 focus:bg-white"
+                          />
+                          <button
+                            type="submit"
+                            className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-2 rounded-xl transition shadow flex-shrink-0"
+                          >
+                            Gửi
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

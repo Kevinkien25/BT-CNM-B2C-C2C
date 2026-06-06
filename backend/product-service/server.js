@@ -470,6 +470,158 @@ app.delete('/api/admin/products/:id', authenticateToken, requireRole(['admin']),
   }
 });
 
+// --- Livestream Selling APIs ---
+
+// 1. Start Livestream (Seller)
+app.post('/api/products/livestreams/start', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { title } = req.body;
+  if (!title || !title.trim()) {
+    return res.status(400).json({ message: 'Vui lòng nhập tiêu đề livestream.' });
+  }
+
+  try {
+    const [shops] = await db.query('SELECT id FROM shops WHERE user_id = ? AND is_approved = 1', [req.user.id]);
+    if (shops.length === 0) {
+      return res.status(403).json({ message: 'Bạn chưa có gian hàng được phê duyệt để livestream.' });
+    }
+    const shopId = shops[0].id;
+
+    // End any active livestreams for this shop
+    await db.query("UPDATE livestreams SET status = 'ended' WHERE shop_id = ? AND status = 'live'", [shopId]);
+
+    // Insert new livestream
+    const [result] = await db.query(
+      "INSERT INTO livestreams (shop_id, title, status, viewer_count) VALUES (?, ?, 'live', 0)",
+      [shopId, title.trim()]
+    );
+
+    res.status(201).json({ success: true, streamId: result.insertId, message: 'Khởi tạo livestream thành công.' });
+  } catch (err) {
+    console.error("Lỗi khởi tạo livestream:", err);
+    res.status(500).json({ message: 'Lỗi máy chủ khi khởi tạo livestream.' });
+  }
+});
+
+// 2. End Livestream (Seller)
+app.post('/api/products/livestreams/end/:id', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const streamId = Number(req.params.id);
+  try {
+    const [shops] = await db.query('SELECT id FROM shops WHERE user_id = ? AND is_approved = 1', [req.user.id]);
+    if (shops.length === 0) {
+      return res.status(403).json({ message: 'Bạn không có quyền quản lý livestream này.' });
+    }
+    const shopId = shops[0].id;
+
+    await db.query(
+      "UPDATE livestreams SET status = 'ended' WHERE id = ? AND shop_id = ?",
+      [streamId, shopId]
+    );
+
+    res.json({ success: true, message: 'Đã kết thúc livestream.' });
+  } catch (err) {
+    console.error("Lỗi kết thúc livestream:", err);
+    res.status(500).json({ message: 'Lỗi máy chủ khi kết thúc livestream.' });
+  }
+});
+
+// 3. Pin Product to Livestream (Seller)
+app.post('/api/products/livestreams/pin', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  const { streamId, productId } = req.body;
+  if (!streamId) {
+    return res.status(400).json({ message: 'Thiếu streamId.' });
+  }
+
+  try {
+    const [shops] = await db.query('SELECT id FROM shops WHERE user_id = ? AND is_approved = 1', [req.user.id]);
+    if (shops.length === 0) {
+      return res.status(403).json({ message: 'Bạn không có quyền ghim sản phẩm.' });
+    }
+    const shopId = shops[0].id;
+
+    if (productId) {
+      const [prods] = await db.query('SELECT id FROM products WHERE id = ? AND shop_id = ?', [Number(productId), shopId]);
+      if (prods.length === 0) {
+        return res.status(400).json({ message: 'Sản phẩm không thuộc gian hàng của bạn.' });
+      }
+    }
+
+    await db.query(
+      "UPDATE livestreams SET pinned_product_id = ? WHERE id = ? AND shop_id = ?",
+      [productId ? Number(productId) : null, Number(streamId), shopId]
+    );
+
+    res.json({ success: true, message: 'Đã ghim sản phẩm lên livestream.' });
+  } catch (err) {
+    console.error("Lỗi ghim sản phẩm livestream:", err);
+    res.status(500).json({ message: 'Lỗi máy chủ khi ghim sản phẩm.' });
+  }
+});
+
+// GET My Active Livestream (Seller)
+app.get('/api/products/livestreams/my-active', authenticateToken, requireRole(['c2c_seller', 'b2c_seller']), async (req, res) => {
+  try {
+    const [shops] = await db.query('SELECT id FROM shops WHERE user_id = ? AND is_approved = 1', [req.user.id]);
+    if (shops.length === 0) {
+      return res.status(404).json({ message: 'Bạn chưa có cửa hàng hoặc cửa hàng chưa được phê duyệt.' });
+    }
+    const shopId = shops[0].id;
+    const [streams] = await db.query(
+      `SELECT l.*, p.name AS product_name, p.price AS product_price, p.image_url AS product_image
+       FROM livestreams l
+       LEFT JOIN products p ON l.pinned_product_id = p.id
+       WHERE l.shop_id = ? AND l.status = 'live'
+       LIMIT 1`,
+      [shopId]
+    );
+    if (streams.length === 0) {
+      return res.json({ stream: null });
+    }
+    res.json({ stream: streams[0] });
+  } catch (err) {
+    console.error("Lỗi lấy livestream active của tôi:", err);
+    res.status(500).json({ message: 'Lỗi hệ thống.' });
+  }
+});
+
+// 4. Get Active Livestreams (Public)
+app.get('/api/products/livestreams/active', async (req, res) => {
+  try {
+    const [streams] = await db.query(
+      `SELECT l.*, s.shop_name, s.banner_url,
+              p.name AS product_name, p.price AS product_price, p.image_url AS product_image
+       FROM livestreams l
+       JOIN shops s ON l.shop_id = s.id
+       LEFT JOIN products p ON l.pinned_product_id = p.id
+       WHERE l.status = 'live'
+       ORDER BY l.created_at DESC`
+    );
+    res.json({ streams });
+  } catch (err) {
+    console.error("Lỗi lấy danh sách livestream active:", err);
+    res.status(500).json({ message: 'Lỗi hệ thống khi lấy danh sách livestream.' });
+  }
+});
+
+// 5. Join Livestream (Viewer increment)
+app.post('/api/products/livestreams/:id/join', async (req, res) => {
+  try {
+    await db.query('UPDATE livestreams SET viewer_count = viewer_count + 1 WHERE id = ? AND status = "live"', [Number(req.params.id)]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi khi tham gia livestream.' });
+  }
+});
+
+// 6. Leave Livestream (Viewer decrement)
+app.post('/api/products/livestreams/:id/leave', async (req, res) => {
+  try {
+    await db.query('UPDATE livestreams SET viewer_count = GREATEST(0, viewer_count - 1) WHERE id = ? AND status = "live"', [Number(req.params.id)]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi khi rời livestream.' });
+  }
+});
+
 async function start() {
   await db.initDB();
   app.listen(PORT, () => {
